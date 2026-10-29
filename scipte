@@ -12,23 +12,33 @@ local NOM_CONFIG = "tenebres_mm2_preferences.json"
 local configChargee = {}
 pcall(function()
     if isfile and readfile and isfile(NOM_CONFIG) then
-        configChargee = game:GetService("HttpService"):JSONDecode(readfile(NOM_CONFIG)) or {}
+        local decode = game:GetService("HttpService"):JSONDecode(readfile(NOM_CONFIG))
+        if type(decode) == "table" then configChargee = decode end
     end
 end)
 local function valeurConfig(cle, defaut)
     local v = configChargee[cle]
-    if v == nil then return defaut end
+    if v == nil or type(v) ~= type(defaut) then return defaut end
     return v
 end
 
 -- Réglages
-local TOUCHE_REDUIRE = Enum.KeyCode[valeurConfig("toucheReduireP", "P")] or Enum.KeyCode.P
+-- Un nom de touche venant du fichier JSON peut être invalide : on le valide
+-- avant d'indexer Enum.KeyCode, sinon tout le script s'arrête au chargement.
+local function lireTouche(nom, defaut)
+    local v = valeurConfig(nom, defaut.Name)
+    local ok, code = pcall(function() return Enum.KeyCode[v] end)
+    if ok and typeof(code) == "EnumItem" then return code end
+    return defaut
+end
+local TOUCHE_REDUIRE = lireTouche("toucheReduireP", Enum.KeyCode.P)
 
 local actif = false
 local fermee = false
 
 local racine, humanoide = nil, nil
 local definirActif
+local reinitialiserAntiFling
 local basculerReduit
 local flingGlobal
 
@@ -38,6 +48,7 @@ local majHistoriqueNotifications = nil
 local notifierInterface = nil
 local flingActif = false
 local resynchroniserCollisionsFarm = nil
+local flyControl
 
 -- ============================ ANTI-FLING ============================
 do
@@ -58,19 +69,24 @@ local function desactiverPiece(info, p)
 	p.CanCollide = false
 end
 
-local function oublier(autre)
+-- `infoAttendue` empêche le gestionnaire AncestryChanged d'un ancien
+-- personnage de supprimer le suivi du nouveau personnage du même joueur.
+local function oublier(autre, infoAttendue)
 	local info = suivis[autre]
 	if not info then return end
+	if infoAttendue and info ~= infoAttendue then return end
 	for _, c in ipairs(info.conns) do c:Disconnect() end
 	for p, original in pairs(info.parts) do
-		if p.Parent and actif == false then p.CanCollide = original end
+		-- On restaure même pendant l'anti-fling : le personnage est en train
+		-- d'être retiré et ses collisions ne doivent pas rester bloquées.
+		if p.Parent then p.CanCollide = original end
 	end
 	suivis[autre] = nil
 end
 
 local function suivre(autre, perso)
 	oublier(autre)
-	local info = { parts = {}, liste = {}, conns = {} }
+	local info = { parts = {}, liste = {}, conns = {}, perso = perso }
 	suivis[autre] = info
 
 	local function ajouter(p)
@@ -95,14 +111,20 @@ local function suivre(autre, perso)
 		end
 	end))
 	table.insert(info.conns, perso.AncestryChanged:Connect(function(_, parent)
-		if not parent then oublier(autre) end
+		if not parent then oublier(autre, info) end
 	end))
 end
 
 local function surveillerJoueur(autre)
-	if autre == joueur then return end
-	autre.CharacterAdded:Connect(function(perso) suivre(autre, perso) end)
-	autre.CharacterRemoving:Connect(function() oublier(autre) end)
+	if autre == joueur or fermee then return end
+	autre.CharacterAdded:Connect(function(perso)
+		if fermee then return end
+		suivre(autre, perso)
+	end)
+	autre.CharacterRemoving:Connect(function(perso)
+		local info = suivis[autre]
+		if info and info.perso == perso then oublier(autre, info) end
+	end)
 	if autre.Character then suivre(autre, autre.Character) end
 end
 
@@ -136,12 +158,28 @@ end)
 if joueur.Character then task.spawn(nouveauPersonnage, joueur.Character) end
 
 function definirActif(valeur)
-	actif = valeur
+	actif = valeur == true
 	if actif then
+		-- Application immédiate : le premier pas physique ne doit pas encore
+		-- laisser les collisions actives après l'activation de l'option.
+		for _, info in pairs(suivis) do
+			for p in pairs(info.parts) do
+				if p.Parent then p.CanCollide = false end
+			end
+		end
 		derniereSure = racine and racine.CFrame or nil
 		derniereMaj = os.clock()
 	else
 		restaurerCollisions()
+	end
+end
+
+-- Utilisé par la téléportation : sans cela, la position "sûre" mémorisée
+-- avant le TP peut déclencher un retour arrière au premier pic de vitesse.
+reinitialiserAntiFling = function()
+	if actif then
+		derniereSure = racine and racine.CFrame or nil
+		derniereMaj = os.clock()
 	end
 end
 
@@ -163,6 +201,16 @@ RunService.Stepped:Connect(function()
 		or etat == Enum.HumanoidStateType.Dead
 		or etat == Enum.HumanoidStateType.FallingDown
 		or etat == Enum.HumanoidStateType.Ragdoll then
+		return
+	end
+
+	-- Fly, farm et fling pilotent volontairement la position et la vitesse :
+	-- l'anti-fling ne doit pas les faire revenir en arrière. On recale la
+	-- position "sûre" pour ne pas déclencher un retour au moment où ils
+	-- s'arrêtent.
+	if flingActif or (flyControl and (flyControl.flyOn or flyControl.farmActif)) then
+		derniereSure = racine.CFrame
+		derniereMaj = os.clock()
 		return
 	end
 
@@ -204,7 +252,7 @@ joueur.Idled:Connect(function()
 end)
 
 local vitesseOn, vitesseVal = valeurConfig("vitesseOn", false), valeurConfig("vitesseVal", 32)
-local flyControl = {
+flyControl = {
     flyOn = valeurConfig("flyOn", false),
     flySpeed = valeurConfig("flySpeed", 70),
     noclipOn = valeurConfig("noclipOn", false),
@@ -294,7 +342,8 @@ local function nettoyerFly()
             if flyOldAutoRotate ~= nil then humanoide.AutoRotate = flyOldAutoRotate end
             humanoide:ChangeState(Enum.HumanoidStateType.GettingUp)
             task.defer(function()
-                if humanoide and humanoide.Parent and not flyOn then
+                if humanoide and humanoide.Parent and not flyOn
+                    and not flyControl.farmActif and not flingActif then
                     pcall(function() humanoide:ChangeState(Enum.HumanoidStateType.Running) end)
                 end
             end)
@@ -304,7 +353,7 @@ local function nettoyerFly()
 end
 
 local function preparerFly()
-    if not flyOn or not racine or not racine.Parent then return end
+    if not flyOn or flingActif or not racine or not racine.Parent then return end
     if not flyVelocity or flyVelocity.Parent ~= racine then
         if flyVelocity then pcall(function() flyVelocity:Destroy() end) end
         flyVelocity = Instance.new("BodyVelocity")
@@ -331,7 +380,7 @@ local function preparerFly()
 end
 
 local function mettreAJourFly()
-    if not flyOn then return end
+    if not flyOn or flingActif then return end
     if not racine or not racine.Parent then return end
     preparerFly()
     if not flyVelocity or not flyGyro then return end
@@ -426,8 +475,13 @@ RunService.Stepped:Connect(function()
     local y = racine.Position.Y
     if humanoide and humanoide.FloorMaterial ~= Enum.Material.Air then
         noclipRefY = y
-    elseif (not flyControl.farmActif) and noclipRefY and y < noclipRefY - CHUTE_MAX_NOCLIP then
-        -- Retour de secours désactivé pendant l'auto farm (pièces très bas possibles).
+    elseif flyControl.flyOn or flyControl.farmActif or flingActif then
+        -- En vol, en farm ou pendant un fling, la position verticale change
+        -- volontairement : on recale la référence au lieu de téléporter le
+        -- personnage vers l'ancienne hauteur.
+        noclipRefY = y
+    elseif noclipRefY and y < noclipRefY - CHUTE_MAX_NOCLIP then
+        -- Retour de secours uniquement en noclip simple (hors fly/farm/fling).
         pcall(function()
             racine.AssemblyLinearVelocity = Vector3.zero
             racine.CFrame = CFrame.new(racine.Position.X, noclipRefY + 3, racine.Position.Z)
@@ -476,19 +530,62 @@ end)
 RunService.RenderStepped:Connect(function()
     if fermee then return end
     if flyOn then mettreAJourFly() end
-    if noclipOn and joueur.Character ~= noclipCharacter then attacherNoclip(joueur.Character) end
+    if noclipOn and joueur.Character and joueur.Character ~= noclipCharacter then
+        attacherNoclip(joueur.Character)
+    end
 end)
 
-flyControl.activerFly = function(etat)
-    flyOn = etat == true
+flyControl.activerFly = function(etat, silencieux)
+    etat = etat == true
+
+    -- Pendant un fling, les BodyMovers du vol entreraient en conflit avec
+    -- le cube d'impact : on refuse l'activation manuelle.
+    if etat and flingActif then
+        if notifierInterface and not silencieux then
+            notifierInterface("Fling en cours : fly bloqué", Color3.fromRGB(255, 150, 50), "fly_fling_" .. tostring(os.clock()))
+        end
+        if flyControl.synchroniserFly then flyControl.synchroniserFly(flyOn) end
+        return
+    end
+
+    -- Le fly est prioritaire sur l'auto farm : on l'arrête proprement au lieu
+    -- de laisser deux systèmes écrire la même CFrame/les mêmes vitesses.
+    if etat and flyControl.farm and flyControl.farm.desactiver then
+        pcall(flyControl.farm.desactiver)
+    end
+
+    flyOn = etat
     flyControl.flyOn = flyOn
     if flyOn then preparerFly() else nettoyerFly() end
+    if flyControl.synchroniserFly then flyControl.synchroniserFly(flyOn) end
+    if notifierInterface and not silencieux then
+        notifierInterface(flyOn and "Fly activé" or "Fly désactivé",
+            flyOn and Color3.fromRGB(74, 222, 128) or Color3.fromRGB(57, 52, 76),
+            "fly_" .. tostring(os.clock()))
+    end
 end
 flyControl.activerNoclip = function(etat, silencieux)
-    noclipOn = etat == true
+    etat = etat == true
+
+    if etat and flingActif then
+        if notifierInterface and not silencieux then
+            notifierInterface("Fling en cours : noclip bloqué", Color3.fromRGB(255, 150, 50), "noclip_fling_" .. tostring(os.clock()))
+        end
+        if flyControl.synchroniserNoclip then flyControl.synchroniserNoclip(noclipOn) end
+        return
+    end
+
+    -- Désactiver le noclip pendant le farm rendrait le déplacement à travers
+    -- les murs incohérent : on arrête d'abord le farm.
+    if not etat and flyControl.farm and flyControl.farm.desactiver then
+        pcall(flyControl.farm.desactiver)
+    end
+
+    noclipOn = etat
     flyControl.noclipOn = noclipOn
     if noclipOn then attacherNoclip(joueur.Character) else viderNoclip() end
     if resynchroniserCollisionsFarm then pcall(resynchroniserCollisionsFarm) end
+    if flyControl.synchroniserNoclip then flyControl.synchroniserNoclip(noclipOn) end
     if notifierInterface and not silencieux then
         notifierInterface(noclipOn and "Noclip activé" or "Noclip désactivé",
             noclipOn and Color3.fromRGB(74, 222, 128) or Color3.fromRGB(57, 52, 76),
@@ -509,6 +606,16 @@ end
 flyControl.setNoclipTransp = function(v)
     noclipTransparence = math.clamp(v, 0, 100) / 100
     flyControl.noclipTransp = v
+end
+
+-- Après une téléportation, la hauteur de référence du noclip et le gyro du
+-- fly appartiennent encore à l'ancienne position : on les recale.
+flyControl.reinitialiserNoclipY = function()
+    noclipRefY = racine and racine.Position.Y or nil
+end
+flyControl.reinitialiserApresTeleport = function()
+    if flyVelocity then flyVelocity.Velocity = Vector3.zero end
+    if flyGyro and racine and racine.Parent then flyGyro.CFrame = racine.CFrame end
 end
 end
 
@@ -1708,34 +1815,7 @@ do
 local derniereAlerte = {}
 local notificationsActives = 0
 local function notifier(message, couleur, cle)
-	local t = os.clock()
-	if derniereAlerte[cle] and t - derniereAlerte[cle] < 6 then return end
-	derniereAlerte[cle] = t
-    table.insert(historiqueNotifications, 1, {message = tostring(message), heure = os.date("%H:%M:%S")})
-    while #historiqueNotifications > 12 do table.remove(historiqueNotifications) end
-    if majHistoriqueNotifications then pcall(majHistoriqueNotifications) end
-    notificationsActives = notificationsActives + 1
-    local rang = notificationsActives - 1
-    local decalageY = rang * 46
-    local fond = creer("Frame", {
-        Size = UDim2.fromOffset(250, 38), AnchorPoint = Vector2.new(1, 0.5),
-        Position = UDim2.new(1, 270, 0.5, decalageY), BackgroundColor3 = COL.CARTE, BorderSizePixel = 0,
-    }, gui)
-	coins(fond, 10)
-	creer("UIStroke", { Thickness = 1.5, Color = couleur, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, fond)
-	texte(fond, {
-		Size = UDim2.fromScale(1, 1), Text = message, Font = Enum.Font.GothamBold, TextSize = 13,
-		TextXAlignment = Enum.TextXAlignment.Center,
-	})
-	tw(fond, { Position = UDim2.new(1, -18, 0.5, decalageY) }, 0.3, Enum.EasingStyle.Back)
-	task.delay(3, function()
-		if fond.Parent then
-            tw(fond, { Position = UDim2.new(1, 270, 0.5, decalageY) }, 0.25).Completed:Connect(function()
-                if fond then fond:Destroy() end
-                notificationsActives = math.max(0, notificationsActives - 1)
-            end)
-		end
-	end)
+    -- Notifications visuelles désactivées.
 end
 notifierInterface = notifier
 
