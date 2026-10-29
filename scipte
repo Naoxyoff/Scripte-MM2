@@ -981,7 +981,7 @@ local function texte(parent, props)
 end
 
 local gui = creer("ScreenGui", {
-	Name = "AntiFlingMenu", ResetOnSpawn = false, IgnoreGuiInset = true,
+	Name = "LesTenebresMenu", ResetOnSpawn = false, IgnoreGuiInset = true,
 	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 }, joueur:WaitForChild("PlayerGui"))
 
@@ -1115,8 +1115,8 @@ else
 			if not (requete and ecrire and asset) then return end
 			local rep = requete({ Url = URL_ICONE, Method = "GET" })
 			if not rep or not rep.Body or #rep.Body == 0 then return end
-			ecrire("antifling_icone.png", rep.Body)
-			afficherImage(asset("antifling_icone.png"))
+			ecrire("tenebres_icone.png", rep.Body)
+			afficherImage(asset("tenebres_icone.png"))
 		end)
 	end)
 end
@@ -1555,7 +1555,7 @@ if imageSource then afficherImage(imageSource) end
 
 texte(barreG, {
 	Size = UDim2.fromOffset(110, 16), Position = UDim2.fromOffset(49, 7),
-	Text = "Anti-Fling", Font = Enum.Font.GothamBold, TextSize = 14,
+	Text = "Les Tenebres", Font = Enum.Font.GothamBold, TextSize = 14,
 })
 texte(barreG, {
 	Size = UDim2.fromOffset(110, 14), Position = UDim2.fromOffset(49, 24),
