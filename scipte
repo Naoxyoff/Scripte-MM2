@@ -4013,16 +4013,38 @@ local function quitterFarm()
 	end
 	if h and h.Parent then
 		pcall(function()
+			-- Correctif sortie douce : FallingDown/Ragdoll restent désactivés ~1,5 s
+			-- pour éviter que le personnage s'effondre au sol en quittant le farm.
 			h.PlatformStand = false
 			h.AutoRotate = true
-			h:SetStateEnabled(Enum.HumanoidStateType.FallingDown, true)
-			h:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, true)
+			h:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+			h:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
 			h.Sit = false
 			h:ChangeState(Enum.HumanoidStateType.GettingUp)
+		end)
+		task.spawn(function()
+			for _ = 1, 8 do
+				task.wait(0.05)
+				if enFarm or flyControl.flyOn or flingActif then return end
+				if r and r.Parent then
+					pcall(function()
+						r.AssemblyLinearVelocity = Vector3.zero
+						r.AssemblyAngularVelocity = Vector3.zero
+					end)
+				end
+			end
 		end)
 		task.delay(0.1, function()
 			if h and h.Parent and not enFarm and not flyControl.flyOn and not flingActif then
 				pcall(function() h:ChangeState(Enum.HumanoidStateType.Running) end)
+			end
+		end)
+		task.delay(1.5, function()
+			if h and h.Parent and not enFarm then
+				pcall(function()
+					h:SetStateEnabled(Enum.HumanoidStateType.FallingDown, true)
+					h:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, true)
+				end)
 			end
 		end)
 	end
