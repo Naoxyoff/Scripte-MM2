@@ -129,7 +129,14 @@ local function enregistrerConfig(cle, valeur)
     sauvegardeEnAttente = true
     task.delay(0.8, function()
         sauvegardeEnAttente = false
-        sauvegarderConfig()
+        local ok, erreur = sauvegarderConfig()
+        if not ok then
+            -- Correctif : l'echec de la sauvegarde auto n'est plus silencieux
+            warn("[Tenebres] Sauvegarde auto impossible : " .. tostring(erreur))
+            environnementGlobal.__TENEBRES_ERR_SAUVEGARDE = tostring(erreur)
+        else
+            environnementGlobal.__TENEBRES_ERR_SAUVEGARDE = nil
+        end
     end)
 end
 
@@ -3243,6 +3250,9 @@ local function teleporterVers(cible)
         local rotation = racine.CFrame - racine.Position
         racine.CFrame = CFrame.new(position) * rotation
     end)
+    -- Correctif : après un TPA on ne sait plus si tu participes à la manche
+    -- (mort / spectateur) : l'Auto Farm reste en pause jusqu'à la prochaine manche.
+    flyControl.farmBloqueTP = generationManche
     if notifierInterface then
         notifierInterface("Téléporté au-dessus de la tête de " .. cible.DisplayName, COL.VERT, "tp_ok_" .. tostring(os.clock()))
     end
@@ -4041,7 +4051,16 @@ local function rafraichirFarm(r, h)
 	end
 end
 
+-- Correctif : fin de manche / blocage. Le farm sort du sol dès que la manche est finie
+-- (murder mort, sheriff/héros/murder vainqueur) ou qu'aucune pièce n'est récoltée depuis longtemps.
+local murderVu, tMurderAbsent = false, nil
+local pauseStallJusqua, derniereRecolte = 0, 0
+local DELAI_SANS_RECOLTE = 25
+local DELAI_MURDER_ABSENT = 2.5
+
 local function nouvelleManche()
+	murderVu, tMurderAbsent = false, nil
+	pauseStallJusqua, derniereRecolte = 0, os.clock()
 	recoltesManche = 0
 	finTraitee = false
 	aFarme = false
@@ -4058,6 +4077,7 @@ local function succes()
 	recoltesManche = recoltesManche + 1
 	recolteesSession = recolteesSession + 1
 	recolteesTotal = recolteesTotal + 1
+	derniereRecolte = os.clock()
 	echecs = 0
 end
 
@@ -4185,7 +4205,26 @@ local function pas(dt)
 
 	local auLobby = estAuLobby()
 	local mort = joueursElimines[joueur.Name] == true
+
+	-- Fin de manche : événement serveur (mancheTerminee) OU murder disparu après avoir été vu
+	local finMurder = false
+	if infoMurder ~= "—" then
+		murderVu, tMurderAbsent = true, nil
+	elseif murderVu then
+		tMurderAbsent = tMurderAbsent or t
+		if t - tMurderAbsent >= DELAI_MURDER_ABSENT then finMurder = true end
+	end
+	local finManche = mancheTerminee or finMurder
+
+	-- Blocage : aucune pièce récoltée depuis trop longtemps -> pause puis nouvel essai
+	if enFarm and t - derniereRecolte > DELAI_SANS_RECOLTE then
+		pauseStallJusqua = t + 25
+		derniereRecolte = t
+	end
+
+	local bloqueTP = flyControl.farmBloqueTP ~= nil and flyControl.farmBloqueTP == generationManche
 	local engage = restantes > 0 and not auLobby and distanceMin <= RAYON_ENGAGE and not sacPlein and not mort
+		and not finManche and t >= pauseStallJusqua and not bloqueTP
 
 	if not engage then
 		if enFarm then quitterFarm() end
@@ -4195,6 +4234,12 @@ local function pas(dt)
 				finTraitee = true
 				actionFin()
 			end
+		elseif bloqueTP then
+			etatTexte = "Téléportation manuelle : farm en pause jusqu'à la prochaine manche"
+		elseif finManche then
+			etatTexte = "Manche terminée : farm en pause jusqu'à la prochaine manche"
+		elseif t < pauseStallJusqua then
+			etatTexte = "Aucune pièce récoltable : pause avant nouvel essai"
 		elseif mort then
 			etatTexte = "Éliminé : collecte en pause jusqu'à la prochaine manche"
 		elseif sacPlein then
@@ -4209,6 +4254,7 @@ local function pas(dt)
 
 	if not enFarm then
 		entrerFarm(r, h)
+		derniereRecolte = t
 		aFarme = true
 		finTraitee = false
 		notif("Collecte lancée", VERT_ON)
@@ -4872,6 +4918,8 @@ do
 local function fermerScript()
 
     if fermee then return end
+    -- Correctif : sauvegarde finale avant de tout couper
+    pcall(sauvegarderConfig)
     fermee = true
     local interface = gui
     pcall(function()
