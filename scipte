@@ -837,6 +837,9 @@ local rolesServeur = {}
 local joueursElimines = {}
 local mancheTerminee = false
 local finMancheEnAttente = false
+-- Correctif : verrou de fin de manche pour l'Auto Farm. Il reste actif même si un événement
+-- de rôles arrive juste après la fin et remet mancheTerminee à false.
+local latchFinManche, tFinManche = false, 0
 local nouvelleMancheAnnoncee = false
 -- Compteur fiable : il avance uniquement après une fin de manche confirmée
 -- puis la réception des rôles de la manche suivante.
@@ -886,6 +889,7 @@ do
 				if finManche then
 
 					mancheTerminee = true
+					latchFinManche, tFinManche = true, os.clock()
 					finMancheEnAttente = true
 					table.clear(rolesServeur)
 					table.clear(joueursElimines)
@@ -4076,12 +4080,14 @@ end
 -- Correctif : fin de manche / blocage. Le farm sort du sol dès que la manche est finie
 -- (murder mort, sheriff/héros/murder vainqueur) ou qu'aucune pièce n'est récoltée depuis longtemps.
 local murderVu, tMurderAbsent = false, nil
+local murderNom = nil
 local pauseStallJusqua, derniereRecolte = 0, 0
 local DELAI_SANS_RECOLTE = 25
 local DELAI_MURDER_ABSENT = 2.5
 
 local function nouvelleManche()
 	murderVu, tMurderAbsent = false, nil
+	murderNom = nil
 	pauseStallJusqua, derniereRecolte = 0, os.clock()
 	recoltesManche = 0
 	finTraitee = false
@@ -4215,6 +4221,11 @@ local function pas(dt)
 		generationMancheVue = generationManche
 		nouvelleManche()
 	end
+	-- Nouvelle manche réelle : des rôles arrivent plus de 8 s après la fin
+	if latchFinManche and dernierRoleServeur > tFinManche + 8 then
+		latchFinManche = false
+		nouvelleManche()
+	end
 
 	if t >= prochaineAnalyse then
 		prochaineAnalyse = t + 0.2
@@ -4236,7 +4247,23 @@ local function pas(dt)
 		tMurderAbsent = tMurderAbsent or t
 		if t - tMurderAbsent >= DELAI_MURDER_ABSENT then finMurder = true end
 	end
-	local finManche = mancheTerminee or finMurder
+
+	-- Sheriff/héros gagnent : le murder mémorisé est mort, parti ou sans personnage
+	for nom, role in pairs(rolesServeur) do
+		if role == "murder" then murderNom = nom end
+	end
+	for pj, role in pairs(rolesParJoueur) do
+		if role == "murder" then murderNom = pj.Name end
+	end
+	if murderNom then
+		local pm = Players:FindFirstChild(murderNom)
+		local hm = pm and pm.Character and pm.Character:FindFirstChildOfClass("Humanoid")
+		if joueursElimines[murderNom] or not pm or (hm and hm.Health <= 0) then
+			finMurder = true
+		end
+	end
+
+	local finManche = mancheTerminee or finMurder or latchFinManche
 
 	-- Blocage : aucune pièce récoltée depuis trop longtemps -> pause puis nouvel essai
 	if enFarm and t - derniereRecolte > DELAI_SANS_RECOLTE then
