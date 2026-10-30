@@ -1,3 +1,12 @@
+--[[
+LES TÉNÈBRES MM2 — VERSION 2.0 (stabilisation)
+
+Base conservée : interface, modules et réglages de la version fournie.
+Améliorations ciblées : diagnostics d'erreurs exploitables, restauration des
+valeurs de déplacement réellement présentes sur le personnage, et versionnement
+du fichier de préférences.
+]]
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -48,6 +57,41 @@ local majHistoriqueNotifications = nil
 local notifierInterface = nil
 local flingActif = false
 local resynchroniserCollisionsFarm = nil
+
+-- Diagnostic de lenteur : les tâches lentes (> 12 ms) et les gels (> 250 ms) sont consignés dans
+-- le centre de notifications (onglet Outils), avec le suspect et l'état des modules actifs.
+local DIAG = { suspect = "", tSuspect = 0, derniers = {}, msEvts = 0, nbEvts = 0 }
+function DIAG.consigner(texte)
+	table.insert(historiqueNotifications, 1, { message = texte, heure = os.date("%H:%M:%S") })
+	while #historiqueNotifications > 12 do table.remove(historiqueNotifications) end
+	if majHistoriqueNotifications then pcall(majHistoriqueNotifications) end
+end
+function DIAG.mesure(nom, f, ...)
+	local t0 = os.clock()
+	local args = table.pack(...)
+	local ok, resultat = xpcall(function()
+		return f(table.unpack(args, 1, args.n))
+	end, debug.traceback)
+	local ms = (os.clock() - t0) * 1000
+	DIAG.msEvts = DIAG.msEvts + ms
+	DIAG.nbEvts = DIAG.nbEvts + 1
+	local maintenant = os.clock()
+	if not ok then
+		DIAG.suspect, DIAG.tSuspect = nom, maintenant
+		if not DIAG.derniers["erreur_" .. nom] or maintenant - DIAG.derniers["erreur_" .. nom] > 5 then
+			DIAG.derniers["erreur_" .. nom] = maintenant
+			local detail = tostring(resultat):gsub("[\r\n]+", " ")
+			DIAG.consigner(string.format("Erreur %s : %s", nom, string.sub(detail, 1, 180)))
+		end
+	elseif ms > 12 then
+		DIAG.suspect, DIAG.tSuspect = nom, maintenant
+		if not DIAG.derniers[nom] or maintenant - DIAG.derniers[nom] > 5 then
+			DIAG.derniers[nom] = maintenant
+			DIAG.consigner(string.format("Lent : %s %d ms", nom, math.floor(ms + 0.5)))
+		end
+	end
+	return ok, resultat
+end
 local flyControl
 
 -- ============================ ANTI-FLING ============================
@@ -118,14 +162,16 @@ end
 local function surveillerJoueur(autre)
 	if autre == joueur or fermee then return end
 	autre.CharacterAdded:Connect(function(perso)
-		if fermee then return end
+		-- Ne scanne pas les descendants des avatars à chaque respawn si Anti-Fling est OFF.
+		-- C'était un travail inutile déclenché précisément pendant les transitions de manche.
+		if fermee or not actif then return end
 		suivre(autre, perso)
 	end)
 	autre.CharacterRemoving:Connect(function(perso)
 		local info = suivis[autre]
 		if info and info.perso == perso then oublier(autre, info) end
 	end)
-	if autre.Character then suivre(autre, autre.Character) end
+	if actif and autre.Character then suivre(autre, autre.Character) end
 end
 
 for _, autre in ipairs(Players:GetPlayers()) do surveillerJoueur(autre) end
@@ -133,10 +179,14 @@ Players.PlayerAdded:Connect(surveillerJoueur)
 Players.PlayerRemoving:Connect(oublier)
 
 local function restaurerCollisions()
-	for _, info in pairs(suivis) do
-		for p, original in pairs(info.parts) do
-			if p.Parent then p.CanCollide = original end
-		end
+	-- Restaure et débranche aussi les écouteurs par personnage : une option OFF
+	-- ne doit pas conserver des milliers de références/connexions inutiles.
+	local aOublier = {}
+	for autre in pairs(suivis) do
+		aOublier[#aOublier + 1] = autre
+	end
+	for _, autre in ipairs(aOublier) do
+		oublier(autre)
 	end
 end
 
@@ -160,11 +210,11 @@ if joueur.Character then task.spawn(nouveauPersonnage, joueur.Character) end
 function definirActif(valeur)
 	actif = valeur == true
 	if actif then
-		-- Application immédiate : le premier pas physique ne doit pas encore
-		-- laisser les collisions actives après l'activation de l'option.
-		for _, info in pairs(suivis) do
-			for p in pairs(info.parts) do
-				if p.Parent then p.CanCollide = false end
+		-- Le suivi des personnages ne démarre que lorsque l'utilisateur active Anti-Fling.
+		-- On scanne alors les avatars présents une seule fois, puis leurs ajouts via DescendantAdded.
+		for _, autre in ipairs(Players:GetPlayers()) do
+			if autre ~= joueur and autre.Character then
+				suivre(autre, autre.Character)
 			end
 		end
 		derniereSure = racine and racine.CFrame or nil
@@ -252,6 +302,14 @@ joueur.Idled:Connect(function()
 end)
 
 local vitesseOn, vitesseVal = valeurConfig("vitesseOn", false), valeurConfig("vitesseVal", 32)
+-- Les valeurs de base sont mémorisées par personnage : ne pas supposer 16/50.
+local vitesseOrigine = 16
+local sautOrigine = 50
+local useJumpPowerOrigine = true
+local valeursMouvementCapturees = false
+joueur.CharacterAdded:Connect(function()
+	valeursMouvementCapturees = false
+end)
 flyControl = {
     flyOn = valeurConfig("flyOn", false),
     flySpeed = valeurConfig("flySpeed", 70),
@@ -293,6 +351,12 @@ RunService.RenderStepped:Connect(function(dt)
 	if fermee then return end
 	if dt > 0 then fpsActuel = fpsActuel + (1 / dt - fpsActuel) * 0.1 end
 	if gravOn then workspace.Gravity = gravVal end
+	if humanoide and not valeursMouvementCapturees then
+		vitesseOrigine = humanoide.WalkSpeed
+		sautOrigine = humanoide.JumpPower
+		useJumpPowerOrigine = humanoide.UseJumpPower
+		valeursMouvementCapturees = true
+	end
 	if vitesseOn and humanoide then humanoide.WalkSpeed = vitesseVal end
 	if sautOn and humanoide then
 		humanoide.UseJumpPower = true
@@ -315,6 +379,38 @@ local noclipTransparence = (flyControl.noclipTransp or 65) / 100
 local flyVelocity, flyGyro = nil, nil
 local flyKeys = {W=false, A=false, S=false, D=false, Up=false, Down=false}
 local flyOldAutoRotate = nil
+-- Coupe les sons de déplacement pendant le vol, puis restaure leurs volumes.
+local flySonsSilences = {}
+local flySonAjouteConnection = nil
+local function appliquerSilencePas(instance)
+    if not instance or not instance:IsA("Sound") then return end
+    local nom = string.lower(instance.Name)
+    if nom == "running" or nom == "walking" or nom == "footsteps" or nom == "footstep" then
+        if flySonsSilences[instance] == nil then
+            flySonsSilences[instance] = instance.Volume
+        end
+        pcall(function() instance.Volume = 0; instance:Stop() end)
+    end
+end
+local function couperSonsPasFly()
+    local personnage = joueur.Character
+    if not personnage then return end
+    for _, objet in ipairs(personnage:GetDescendants()) do
+        appliquerSilencePas(objet)
+    end
+    if not flySonAjouteConnection then
+        flySonAjouteConnection = personnage.DescendantAdded:Connect(function(objet)
+            if flyOn then appliquerSilencePas(objet) end
+        end)
+    end
+end
+local function restaurerSonsPasFly()
+    if flySonAjouteConnection then pcall(function() flySonAjouteConnection:Disconnect() end); flySonAjouteConnection = nil end
+    for son, volume in pairs(flySonsSilences) do
+        if son and son.Parent then pcall(function() son.Volume = volume end) end
+    end
+    table.clear(flySonsSilences)
+end
 local noclipOriginal = {}
 local noclipVisualOriginal = {}
 local noclipAddedConnection = nil
@@ -325,6 +421,7 @@ local noclipRefY = nil
 local CHUTE_MAX_NOCLIP = 80
 
 local function nettoyerFly()
+    restaurerSonsPasFly()
     if flyVelocity then pcall(function() flyVelocity:Destroy() end); flyVelocity = nil end
     if flyGyro then pcall(function() flyGyro:Destroy() end); flyGyro = nil end
     for key in pairs(flyKeys) do flyKeys[key] = false end
@@ -354,6 +451,7 @@ end
 
 local function preparerFly()
     if not flyOn or flingActif or not racine or not racine.Parent then return end
+    couperSonsPasFly()
     if not flyVelocity or flyVelocity.Parent ~= racine then
         if flyVelocity then pcall(function() flyVelocity:Destroy() end) end
         flyVelocity = Instance.new("BodyVelocity")
@@ -624,22 +722,22 @@ end
 local COL = {
 	COULEUR_MURDER = Color3.fromRGB(255, 60, 60),
 	COULEUR_SHERIF = Color3.fromRGB(70, 150, 255),
-	COULEUR_HEROS = Color3.fromRGB(255, 208, 0),
+	COULEUR_HEROS = Color3.fromRGB(255, 255, 0),
 	COULEUR_INNOCENT = Color3.fromRGB(60, 230, 110),
 	COULEUR_ARME = Color3.fromRGB(255, 240, 120),
-	VIOLET = Color3.fromRGB(139, 92, 246),
-	ORCHIDEE = Color3.fromRGB(205, 160, 255),
+	VIOLET = Color3.fromRGB(220, 38, 55),
+	ORCHIDEE = Color3.fromRGB(255, 76, 86),
 	VERT = Color3.fromRGB(74, 222, 128),
 	ROUGE = Color3.fromRGB(248, 85, 105),
     ORANGE = Color3.fromRGB(255, 150, 50),
-	FOND = Color3.fromRGB(13, 12, 20),
-	LATERAL = Color3.fromRGB(18, 16, 29),
-	CARTE = Color3.fromRGB(25, 23, 39),
-	CARTE_CLAIRE = Color3.fromRGB(39, 35, 58),
-	BORDURE = Color3.fromRGB(86, 68, 125),
-	GRIS = Color3.fromRGB(57, 52, 76),
-	TEXTE = Color3.fromRGB(246, 243, 255),
-	MUET = Color3.fromRGB(164, 156, 190),
+	FOND = Color3.fromRGB(7, 8, 10),
+	LATERAL = Color3.fromRGB(12, 13, 16),
+	CARTE = Color3.fromRGB(20, 21, 25),
+	CARTE_CLAIRE = Color3.fromRGB(31, 32, 37),
+	BORDURE = Color3.fromRGB(61, 37, 41),
+	GRIS = Color3.fromRGB(54, 55, 61),
+	TEXTE = Color3.fromRGB(245, 242, 238),
+	MUET = Color3.fromRGB(157, 157, 162),
 	BLANC = Color3.new(1, 1, 1),
 }
 
@@ -648,8 +746,10 @@ local NOMS_ROLES = { murder = "Murder", sherif = "Sheriff", heros = "Héros", in
 local rolesActifs = false
 local armeActive = false
 local nomsActifs = false
-local innocentsVisibles = true
-local opaciteChams = 35
+local DISTANCE_MAX_PSEUDO = 250 -- distance maximale d’affichage des pseudos (studs).
+-- Opacité visuelle des chams : 10 % (donc 90 % de transparence Roblox).
+local opaciteChams = 10
+local transparenceChams = 100 - opaciteChams
 local tracersActifs = false
 local alerteArmeOn = valeurConfig("alerteArmeOn", false)
 local alerteMurderOn = valeurConfig("alerteMurderOn", false)
@@ -659,29 +759,46 @@ local boosterActif = false
 local halos, etiquettes = {}, {}
 local boites = {}
 local rolesParJoueur = {}
--- Rôles annoncés par le serveur AVANT que les armes soient données (nom du joueur -> role).
+-- Rôles annoncés par le serveur AVANT que les armes soient données (Murder ET Sheriff).
 local rolesServeur = {}
+-- Empêche les rôles d'un joueur éliminé de revenir avant la manche suivante.
+local joueursElimines = {}
+local mancheTerminee = false
+local finMancheEnAttente = false
+local nouvelleMancheAnnoncee = false
+local dernierRoleServeur = 0
+local connexionsMort = {}
 do
 	local RS = game:GetService("ReplicatedStorage")
 	local function normaliser(v)
 		if type(v) ~= "string" then return nil end
 		local t = string.lower(v)
 		if string.find(t, "murder", 1, true) then return "murder" end
+		-- Accepte Sheriff/SheriffRole/Sherif et variantes renvoyées par le serveur.
 		if string.find(t, "sher", 1, true) then return "sherif" end
 		if string.find(t, "hero", 1, true) then return "heros" end
 		if string.find(t, "innocent", 1, true) then return "innocent" end
 		return nil
 	end
-	-- Cherche une table du type { [nomJoueur] = { Role = "Murderer", ... }, ... }
+	-- Lit les annonces de rôles serveur, y compris lorsqu'elles sont imbriquées.
+	-- Exemples : { [nomJoueur] = { Role = "Murderer" } } ou { Roles = {...} }.
 	local function lireTable(t)
 		if type(t) ~= "table" then return nil end
-		local res, trouve = {}, false
-		for k, v in pairs(t) do
-			if type(k) == "string" and type(v) == "table" then
-				local r = normaliser(v.Role or v.role)
-				if r then res[k] = r trouve = true end
+		local res, trouve, visites = {}, false, {}
+		local function parcourir(tab, profondeur)
+			if type(tab) ~= "table" or profondeur > 5 or visites[tab] then return end
+			visites[tab] = true
+			for k, v in pairs(tab) do
+				if type(k) == "string" and type(v) == "table" then
+					local r = normaliser(v.Role or v.role or v.RoleName or v.roleName or v.PlayerRole or v.playerRole)
+					if r then res[k] = r trouve = true else parcourir(v, profondeur + 1) end
+				elseif type(k) == "string" and type(v) == "string" then
+					local r = normaliser(v)
+					if r then res[k] = r trouve = true end
+				end
 			end
 		end
+		parcourir(t, 0)
 		return trouve and res or nil
 	end
 	local function brancher(o)
@@ -692,10 +809,39 @@ do
 		pcall(function()
 			o.OnClientEvent:Connect(function(...)
 				if fermee then return end
-				if finManche then rolesServeur = {} return end
+				if finManche then
+					-- Verrouille la fin de manche : les anciens outils encore répliqués
+					-- pendant quelques instants ne doivent pas repeindre les rôles.
+					mancheTerminee = true
+					finMancheEnAttente = true
+					table.clear(rolesServeur)
+					table.clear(joueursElimines)
+					for _, p in ipairs(Players:GetPlayers()) do
+						rolesParJoueur[p] = "innocent"
+						local h = halos[p]
+						if h and h.Parent then
+							h.FillColor = COL.COULEUR_INNOCENT
+							h.OutlineColor = COL.COULEUR_INNOCENT:Lerp(Color3.new(1, 1, 1), 0.3)
+						end
+						local b = boites[p]
+						if b and b.Parent then b.Color3 = COL.COULEUR_INNOCENT end
+					end
+					return
+				end
 				for i = 1, select("#", ...) do
 					local res = lireTable((select(i, ...)))
-					if res then rolesServeur = res end
+					if res then
+						-- Une nouvelle annonce après un RoundEnd ouvre la manche suivante.
+						if mancheTerminee then
+							mancheTerminee = false
+							nouvelleMancheAnnoncee = true
+						end
+						dernierRoleServeur = os.clock()
+						-- Fusionne les annonces partielles sans réattribuer un rôle à un joueur mort.
+						for nom, role in pairs(res) do
+							if not joueursElimines[nom] then rolesServeur[nom] = role end
+						end
+					end
 				end
 			end)
 		end)
@@ -713,8 +859,56 @@ local couleurRole, retirerBoite, retirerHalo, retirerEtiquette, retirerArme, net
 
 do
 local haloArme, boiteArme, etiquetteArme = nil, nil, nil
+local auraAttachement, fumeeArme, lumiereArme = nil, nil, nil
 local armesVues, tDerniereArme = false, 0 -- une manche avec armes a-t-elle eu lieu ?
 local sheriffOrigine = nil
+
+-- La fonction est déclarée dans la portée locale du module Chams, puis affectée
+-- à la référence locale partagée avec les boutons et le nettoyage général.
+-- Sans cette affectation, retirerArme restait nil et bloquait majArme dès son appel.
+retirerArme = function()
+    if haloArme then
+        pcall(function() haloArme:Destroy() end)
+        haloArme = nil
+    end
+
+    if boiteArme then
+        pcall(function() boiteArme:Destroy() end)
+        boiteArme = nil
+    end
+
+    if etiquetteArme then
+        pcall(function() etiquetteArme:Destroy() end)
+        etiquetteArme = nil
+    end
+
+    auraAttachement = nil
+    fumeeArme = nil
+    lumiereArme = nil
+end
+
+-- Détecte le lobby par sa zone physique pour activer les pseudos dès l’arrivée sur la map,
+-- sans attendre que les armes soient distribuées.
+local centreLobbyChams, prochainScanLobbyChams = nil, 0
+local function estAuLobbyPourChams()
+	local maintenant = os.clock()
+	if maintenant >= prochainScanLobbyChams then
+		prochainScanLobbyChams = maintenant + 1
+		centreLobbyChams = nil
+		local lobby = workspace:FindFirstChild("Lobby") or workspace:FindFirstChild("lobby")
+		if lobby then
+			local spawn = lobby:FindFirstChildWhichIsA("SpawnLocation", true)
+			if spawn then
+				centreLobbyChams = spawn.Position
+			else
+				local ok, cf = pcall(function() return lobby:GetBoundingBox() end)
+				if ok then centreLobbyChams = cf.Position end
+			end
+		end
+	end
+	if not centreLobbyChams or not racine then return false end
+	return (racine.Position - centreLobbyChams).Magnitude < 80
+end
 
 local function aOutil(joueurCible, nom)
 	local perso = joueurCible.Character
@@ -739,42 +933,128 @@ local function aOutil(joueurCible, nom)
 	return contient(perso) or contient(sac)
 end
 
+local function joueurVivant(p)
+	if not p then return false end
+	local perso = p.Character
+	local hum = perso and perso:FindFirstChildOfClass("Humanoid")
+	return hum ~= nil and hum.Health > 0
+end
+
 local function calculerRoles()
+	-- Applique les signaux de manche avant toute détection par outils.
+	if finMancheEnAttente then
+		finMancheEnAttente = false
+		armesVues = false
+		tDerniereArme = 0
+		sheriffOrigine = nil
+	end
+	if nouvelleMancheAnnoncee then
+		nouvelleMancheAnnoncee = false
+		armesVues = false
+		tDerniereArme = 0
+		sheriffOrigine = nil
+		table.clear(joueursElimines)
+	end
+
+	-- Un événement de fin de manche prime sur les outils encore répliqués : Innocent pour tous.
+	if mancheTerminee then
+		local tousInnocents = {}
+		for _, p in ipairs(Players:GetPlayers()) do tousInnocents[p] = "innocent" end
+		rolesParJoueur = tousInnocents
+		infoManche, infoMurder, infoSherif, infoHeros = "Aucune", "—", "—", "—"
+		return
+	end
+
 	local murder = nil
 	local porteurs = {}
 	for _, p in ipairs(Players:GetPlayers()) do
-		if aOutil(p, "Knife") then murder = p end
-		if aOutil(p, "Gun") then porteurs[#porteurs + 1] = p end
+		if joueurVivant(p) and not joueursElimines[p.Name] then
+			if aOutil(p, "Knife") then murder = p end
+			if aOutil(p, "Gun") then porteurs[#porteurs + 1] = p end
+		end
 	end
 
-	if not murder and #porteurs == 0 then sheriffOrigine = nil end
-	if #porteurs > 0 and not sheriffOrigine then sheriffOrigine = porteurs[1] end
-	if sheriffOrigine and not aOutil(sheriffOrigine, "Gun") then sheriffOrigine = nil end
+	-- Une fois le Sheriff mort, on conserve son identité jusqu'à la fin de manche :
+	-- le joueur qui récupère son arme est alors identifié comme Héros, pas comme Sheriff.
+	local sheriffMort = sheriffOrigine ~= nil and not joueurVivant(sheriffOrigine)
+	-- Priorité à l'annonce de rôle du serveur pour mémoriser le Sheriff d'origine,
+	-- même si son arme est déjà passée à un autre joueur au moment du scan.
+	if not sheriffOrigine then
+		for _, p in ipairs(Players:GetPlayers()) do
+			if rolesServeur[p.Name] == "sherif" then
+				sheriffOrigine = p
+				break
+			end
+		end
+	end
+	-- Important : ne réattribue jamais l'identité du Sheriff d'origine au nouveau porteur
+	-- simplement parce que l'ancien Sheriff n'a plus le Gun pendant un instant.
+	-- L'identité reste verrouillée jusqu'à la fin de manche, puis le reset ci-dessous la vide.
 	if #porteurs > 0 and not sheriffOrigine then sheriffOrigine = porteurs[1] end
 
 	-- Fin de manche : les armes ont disparu -> retour au lobby, tout le monde redevient innocent.
 	if murder or #porteurs > 0 then
 		armesVues = true
 		tDerniereArme = os.clock()
-	elseif armesVues and os.clock() - tDerniereArme > 3 then
+	elseif armesVues and os.clock() - tDerniereArme > 3
+		and os.clock() - dernierRoleServeur > 10 then
+		-- Secours si le RemoteEvent de fin de manche n'est pas identifiable.
+		-- La marge protège les annonces de rôles pré-spawn pendant le chargement.
 		armesVues = false
-		rolesServeur = {}
+		table.clear(rolesServeur)
+		table.clear(joueursElimines)
+		sheriffOrigine = nil
 	end
 
 	local sherif, heros = nil, nil
 	for _, p in ipairs(porteurs) do
-		if p == sheriffOrigine then sherif = p else heros = p end
+		if p == sheriffOrigine and joueurVivant(p) then
+			sherif = p
+		else
+			heros = p
+		end
 	end
 
 	local nouveau = {}
 	local srvActif = false
 	for _, p in ipairs(Players:GetPlayers()) do
 		local r = "innocent"
-		if p == murder then r = "murder"
-		elseif p == heros then r = "heros"
-		elseif p == sherif then r = "sherif" end
+		local personnage = p.Character
+		local hum = personnage and personnage:FindFirstChildOfClass("Humanoid")
+		local personnageCharge = hum ~= nil
+		local vivant = personnageCharge and hum.Health > 0
 		local srv = rolesServeur[p.Name]
-		if srv and srv ~= "innocent" then r = srv srvActif = true end
+
+		-- Un joueur éliminé reste Innocent jusqu'à la manche suivante, même s'il
+		-- réapparaît au lobby ou si une annonce ancienne est répétée.
+		if joueursElimines[p.Name] then
+			r = "innocent"
+		elseif not personnageCharge then
+			-- Avant le chargement du personnage, l'absence d'Humanoid ne signifie
+			-- pas une mort : on conserve l'annonce serveur pré-spawn.
+			if srv and srv ~= "innocent" then
+				r = srv
+				srvActif = true
+			end
+		elseif not vivant then
+			-- Un Humanoid présent avec 0 PV correspond bien à une élimination.
+			rolesServeur[p.Name] = nil
+			joueursElimines[p.Name] = true
+			r = "innocent"
+		elseif p == murder then
+			r = "murder"
+		elseif p == heros then
+			r = "heros"
+		elseif p == sherif then
+			r = "sherif"
+		end
+
+		-- Une annonce de la manche précédente ne peut pas rétablir un rôle après une mort.
+		-- Tant que le personnage n'est pas chargé, on garde l'annonce courante en mémoire.
+		if personnageCharge and vivant and not joueursElimines[p.Name] and srv and srv ~= "innocent" then
+			if r == "innocent" then r = srv end
+			srvActif = true
+		end
 		nouveau[p] = r
 	end
 	rolesParJoueur = nouveau
@@ -820,71 +1100,27 @@ function retirerEtiquette(joueurCible)
 end
 
 local function creerPastille(adornee, parent, decalage, largeur, avecVie)
+	-- Étiquette minimaliste : uniquement le pseudo, sans carte ni informations secondaires.
 	local b = Instance.new("BillboardGui")
 	b.Name = "RoleEtiquette"
 	b.Adornee = adornee
 	b.AlwaysOnTop = true
 	b.LightInfluence = 0
-	b.Size = UDim2.fromOffset(largeur, 36)
-	b.StudsOffset = Vector3.new(0, decalage, 0)
+	b.Size = UDim2.fromOffset(largeur or 120, 22)
+	b.StudsOffset = Vector3.new(0, decalage or 2.5, 0)
 	b.Parent = parent
-
-	local fond = Instance.new("Frame")
-	fond.Name = "Fond"
-	fond.Size = UDim2.fromScale(1, 1)
-	fond.BackgroundColor3 = Color3.fromRGB(14, 14, 20)
-	fond.BackgroundTransparency = 0.2
-	fond.BorderSizePixel = 0
-	fond.Parent = b
-	local coin = Instance.new("UICorner")
-	coin.CornerRadius = UDim.new(0, 9)
-	coin.Parent = fond
-	local contour = Instance.new("UIStroke")
-	contour.Name = "Contour"
-	contour.Thickness = 1.5
-	contour.Parent = fond
 
 	local nom = Instance.new("TextLabel")
 	nom.Name = "Nom"
-	nom.Size = UDim2.new(1, -10, 0, 16)
-	nom.Position = UDim2.fromOffset(5, 3)
+	nom.Size = UDim2.fromScale(1, 1)
 	nom.BackgroundTransparency = 1
 	nom.Font = Enum.Font.GothamBold
-	nom.TextSize = 12
+	nom.TextSize = 14
 	nom.TextColor3 = Color3.new(1, 1, 1)
+	nom.TextStrokeColor3 = Color3.new(0, 0, 0)
+	nom.TextStrokeTransparency = 0.25
 	nom.TextTruncate = Enum.TextTruncate.AtEnd
-	nom.Parent = fond
-
-	local sub = Instance.new("TextLabel")
-	sub.Name = "Sub"
-	sub.Size = UDim2.new(1, -10, 0, 12)
-	sub.Position = UDim2.fromOffset(5, 18)
-	sub.BackgroundTransparency = 1
-	sub.Font = Enum.Font.GothamMedium
-	sub.TextSize = 10
-	sub.Parent = fond
-
-	if avecVie then
-		local rail = Instance.new("Frame")
-		rail.Name = "Rail"
-		rail.Size = UDim2.new(1, -12, 0, 3)
-		rail.Position = UDim2.new(0, 6, 1, -6)
-		rail.BackgroundColor3 = Color3.fromRGB(50, 48, 66)
-		rail.BorderSizePixel = 0
-		rail.Parent = fond
-		local c1 = Instance.new("UICorner")
-		c1.CornerRadius = UDim.new(0.5, 0)
-		c1.Parent = rail
-		local vie = Instance.new("Frame")
-		vie.Name = "Vie"
-		vie.Size = UDim2.fromScale(1, 1)
-		vie.BackgroundColor3 = Color3.fromRGB(52, 199, 89)
-		vie.BorderSizePixel = 0
-		vie.Parent = rail
-		local c2 = Instance.new("UICorner")
-		c2.CornerRadius = UDim.new(0.5, 0)
-		c2.Parent = vie
-	end
+	nom.Parent = b
 	return b
 end
 
@@ -898,8 +1134,10 @@ end
 local function majVisuel(joueurCible)
 	local perso = joueurCible.Character
 	local role = rolesParJoueur[joueurCible] or "innocent"
+	local hum = perso and perso:FindFirstChildOfClass("Humanoid")
+	if not hum or hum.Health <= 0 then role = "innocent" end
 	local rp = perso and perso:FindFirstChild("HumanoidRootPart")
-	local ok = rolesActifs and rp and (role ~= "innocent" or innocentsVisibles)
+	local ok = rolesActifs and rp
 
 	local distance = 0
 	if ok and racine then
@@ -927,7 +1165,8 @@ local function majVisuel(joueurCible)
 	end
 	h.FillColor = c
 	h.OutlineColor = c:Lerp(Color3.new(1, 1, 1), 0.3)
-	h.FillTransparency = opaciteChams / 100
+	h.FillTransparency = transparenceChams / 100
+	h.OutlineTransparency = 0.05
 
 	if estInvisible(perso) then
 		local b = boites[joueurCible]
@@ -943,84 +1182,138 @@ local function majVisuel(joueurCible)
 			boites[joueurCible] = b
 		end
 		b.Color3 = c
-		b.Transparency = math.clamp(opaciteChams / 100, 0.3, 0.8)
+		b.Transparency = transparenceChams / 100
 	else
 		retirerBoite(joueurCible)
 	end
 
-	if nomsActifs then
+	-- Les pseudos apparaissent dès que le personnage local a quitté le lobby et
+	-- est apparu sur la map ; inutile d’attendre la distribution des armes.
+	local pseudoVisible = nomsActifs and racine ~= nil and not estAuLobbyPourChams()
+		and hum ~= nil and hum.Health > 0 and distance <= DISTANCE_MAX_PSEUDO
+	if pseudoVisible then
+		local tete = perso:FindFirstChild("Head") or rp
 		local e = etiquettes[joueurCible]
-		if not e or not e.Parent or e.Adornee ~= rp then
+		if not e or not e.Parent or e.Adornee ~= tete then
 			if e then e:Destroy() end
-			e = creerPastille(rp, rp, 3.8, 140, true)
+			e = creerPastille(tete, tete, 2.5, 120, false)
 			etiquettes[joueurCible] = e
 		end
-		local fond = e:FindFirstChild("Fond")
-		if fond then
-			fond.Contour.Color = c
-			fond.Nom.Text = joueurCible.DisplayName
-			fond.Sub.TextColor3 = c
-			fond.Sub.Text = string.format("%s · %dm", NOMS_ROLES[role], math.floor(distance))
-			local hum = perso:FindFirstChildOfClass("Humanoid")
-			local rail = fond:FindFirstChild("Rail")
-			if hum and rail then
-				local ratio = math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
-				rail.Vie.Size = UDim2.fromScale(ratio, 1)
-				rail.Vie.BackgroundColor3 = Color3.fromRGB(239, 68, 68):Lerp(Color3.fromRGB(52, 199, 89), ratio)
-			end
-		end
+		local nom = e:FindFirstChild("Nom")
+		if nom then nom.Text = joueurCible.DisplayName end
 	else
 		retirerEtiquette(joueurCible)
 	end
 end
 
-local function trouverArmeTombee()
-	local objet = workspace:FindFirstChild("GunDrop", true)
-	if not objet then return nil end
-	if objet:IsA("BasePart") then return objet end
-	return objet:FindFirstChildWhichIsA("BasePart", true)
+-- Le rôle passe immédiatement à Innocent dès l'événement Humanoid.Died.
+local function marquerInnocentApresMort(p, personnage)
+	if p.Character ~= personnage then return end
+	joueursElimines[p.Name] = true
+	rolesServeur[p.Name] = nil
+	rolesParJoueur[p] = "innocent"
+	pcall(function() majVisuel(p) end)
 end
 
-function retirerArme()
-	if haloArme then haloArme:Destroy() haloArme = nil end
-	if boiteArme then boiteArme:Destroy() boiteArme = nil end
-	if etiquetteArme then etiquetteArme:Destroy() etiquetteArme = nil end
+local function surveillerMortPersonnage(p, personnage)
+	if not personnage or p.Character ~= personnage then return end
+	local hum = personnage:FindFirstChildOfClass("Humanoid")
+	if not hum then hum = personnage:WaitForChild("Humanoid", 10) end
+	if not hum or p.Character ~= personnage then return end
+	local ancienne = connexionsMort[p]
+	if ancienne then pcall(function() ancienne:Disconnect() end) end
+	connexionsMort[p] = hum.Died:Connect(function()
+		marquerInnocentApresMort(p, personnage)
+	end)
+	if hum.Health <= 0 then marquerInnocentApresMort(p, personnage) end
 end
+
+local function connecterSurveillanceMort(p)
+	p.CharacterAdded:Connect(function(personnage)
+		task.spawn(surveillerMortPersonnage, p, personnage)
+	end)
+	if p.Character then task.spawn(surveillerMortPersonnage, p, p.Character) end
+end
+
+for _, p in ipairs(Players:GetPlayers()) do connecterSurveillanceMort(p) end
+Players.PlayerAdded:Connect(connecterSurveillanceMort)
+
+local armeCache, objetArmeCache, tRechercheArme = nil, nil, 0
+local function trouverArmeTombee()
+	-- On conserve le GunDrop complet pour surligner sa vraie silhouette,
+	-- ainsi que sa BasePart principale pour positionner l'étiquette.
+	if objetArmeCache and objetArmeCache.Parent
+		and objetArmeCache:IsDescendantOf(workspace)
+		and armeCache and armeCache.Parent and armeCache:IsA("BasePart") then
+		return armeCache, objetArmeCache
+	end
+
+	local maintenant = os.clock()
+	if maintenant - tRechercheArme < 0.25 then return nil, nil end
+	tRechercheArme = maintenant
+	armeCache, objetArmeCache = nil, nil
+
+	local objet = workspace:FindFirstChild("GunDrop", true)
+	if not objet then return nil, nil end
+
+	if objet:IsA("BasePart") then
+		armeCache = objet
+	else
+		armeCache = objet:FindFirstChildWhichIsA("BasePart", true)
+	end
+	if armeCache then objetArmeCache = objet end
+	return armeCache, objetArmeCache
+end
+
 
 local function majArme()
-	local partie = trouverArmeTombee()
-	infoArme = partie and "Oui" or "Non"
+    -- Ne lance aucune recherche récursive dans Workspace lorsque cette option
+    -- et l'alerte d'arme sont désactivées (cas normal pendant les transitions).
+    if not armeActive and not alerteArmeOn then
+        infoArme = "Non"
+        retirerArme()
+        return
+    end
+    local partie, objetGun = trouverArmeTombee()
+    infoArme = partie and "Oui" or "Non"
 
-	if not armeActive or not partie then
-		retirerArme()
-		return
-	end
+    if not armeActive or not partie or not objetGun then
+        retirerArme()
+        return
+    end
 
-	local distance = racine and (racine.Position - partie.Position).Magnitude or 0
+    if not haloArme or not haloArme.Parent
+        or haloArme.Adornee ~= objetGun then
 
-	if not boiteArme or not boiteArme.Parent or boiteArme.Adornee ~= partie then
-		retirerArme()
+        retirerArme()
 
-		boiteArme = Instance.new("SelectionBox")
-		boiteArme.Name = "ArmeContour"
-		boiteArme.Adornee = partie
-		boiteArme.Color3 = COL.COULEUR_ARME
-		boiteArme.LineThickness = 0.04
-		boiteArme.SurfaceColor3 = COL.COULEUR_ARME
-		boiteArme.SurfaceTransparency = 0.8
-		boiteArme.Parent = partie
+        -- Pistolet jaune visible à travers les murs
+        haloArme = Instance.new("Highlight")
+        haloArme.Name = "PistoletDore"
+        haloArme.Adornee = objetGun
+        haloArme.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        haloArme.FillColor = Color3.fromRGB(255, 195, 0)
+        haloArme.OutlineColor = Color3.fromRGB(255, 255, 70)
+        haloArme.FillTransparency = 0.08
+        haloArme.OutlineTransparency = 0
+        haloArme.Parent = workspace
 
-		etiquetteArme = creerPastille(partie, partie, 2.4, 100, false)
-		etiquetteArme.Size = UDim2.fromOffset(100, 32)
-		local fondArme = etiquetteArme.Fond
-		fondArme.Contour.Color = COL.COULEUR_ARME
-		fondArme.Nom.Text = "Gun"
-		fondArme.Sub.TextColor3 = COL.COULEUR_ARME
-	end
+        -- Étiquette Pistolet
+        etiquetteArme = creerPastille(partie, partie, 2.4, 140, false)
+        etiquetteArme.Size = UDim2.fromOffset(140, 24)
+    end
 
-	local fondArme = etiquetteArme and etiquetteArme:FindFirstChild("Fond")
-	if fondArme then fondArme.Sub.Text = string.format("Arme tombée · %dm", math.floor(distance)) end
+    local nomArme = etiquetteArme and etiquetteArme:FindFirstChild("Nom")
+    if nomArme then
+        nomArme.Text = "Pistolet"
+        nomArme.TextColor3 = Color3.fromRGB(255, 225, 25)
+        nomArme.TextSize = 16
+        nomArme.Font = Enum.Font.GothamBlack
+        nomArme.TextStrokeColor3 = Color3.fromRGB(120, 65, 0)
+        nomArme.TextStrokeTransparency = 0
+    end
 end
+
 
 function nettoyerChams()
 	for p in pairs(halos) do retirerHalo(p) end
@@ -1030,32 +1323,67 @@ function nettoyerChams()
 end
 
 task.spawn(function()
-	while not fermee do
-		pcall(calculerRoles)
-		for _, autre in ipairs(Players:GetPlayers()) do
-			if autre ~= joueur then pcall(majVisuel, autre) end
-		end
-		pcall(majArme)
-		task.wait(0.3)
-	end
+    -- Le système d'annonces serveur de scripte(6) reste inchangé :
+    -- il écoute TOUS les RemoteEvents de ReplicatedStorage.Remotes et mémorise
+    -- les rôles reçus avant le spawn. Ce worker ne fait que réconcilier le cache
+    -- à intervalle modéré et ne met à jour les visuels que si une option est active.
+    local prochainCalculRoles = 0
+    local prochainCalculVisuels = 0
+    local prochainScanArme = 0
+    while not fermee do
+        local maintenant = os.clock()
+
+        if maintenant >= prochainCalculRoles then
+            DIAG.mesure("roles", calculerRoles)
+            prochainCalculRoles = maintenant + 0.45
+        end
+
+        if (rolesActifs or nomsActifs) and maintenant >= prochainCalculVisuels then
+            for _, autre in ipairs(Players:GetPlayers()) do
+                if autre ~= joueur then
+                    DIAG.mesure("chams", majVisuel, autre)
+                end
+            end
+            prochainCalculVisuels = maintenant + 0.45
+        end
+
+        -- GunDrop est recherché uniquement si le Chams arme ou son alerte est demandé.
+        if (armeActive or alerteArmeOn) and maintenant >= prochainScanArme then
+            DIAG.mesure("arme", majArme)
+            prochainScanArme = maintenant + 0.9
+        elseif not armeActive and not alerteArmeOn then
+            infoArme = "Non"
+        end
+
+        task.wait(0.05)
+    end
 end)
 end
 
 Players.PlayerRemoving:Connect(function(p)
 	retirerHalo(p)
 	retirerEtiquette(p)
+	local mort = connexionsMort[p]
+	if mort then pcall(function() mort:Disconnect() end) end
+	connexionsMort[p] = nil
+	rolesParJoueur[p] = nil
+	rolesServeur[p.Name] = nil
+	joueursElimines[p.Name] = nil
 end)
 
 -- ============================ INTERFACE ============================
 
-local URL_ICONE = "https://i.ibb.co/twyvLYFb/image-2026-10-27-163117417.png"
+-- Logo LES TENEBRES integre au script (aucun hebergement externe requis).
+local URL_ICONE = ""
 local ID_ROBLOX = ""
+local IMAGE_EMBARQUEE = [[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]]
 
-local LARGEUR, HAUTEUR = 680, 440
-local HAUT_ENTETE = 58
-local LARGEUR_LATERAL = 174
+local LARGEUR, HAUTEUR = 860, 570
+local HAUT_ENTETE = 64
+local LARGEUR_LATERAL = 204
 
-local opaciteFenetre = valeurConfig("opaciteFenetre", 100)
+-- Opacité fixe de la fenêtre : 90 % (aucun réglage affiché dans l’interface).
+local opaciteFenetre = 90
 
 local function creer(classe, props, parent)
 	local o = Instance.new(classe)
@@ -1081,7 +1409,7 @@ end
 local function texte(parent, props)
 	local base = {
 		BackgroundTransparency = 1, TextColor3 = COL.TEXTE, Font = Enum.Font.Gotham,
-		TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left, Text = "",
+		TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left, Text = "",
 	}
 	for k, v in pairs(props) do base[k] = v end
 	return creer("TextLabel", base, parent)
@@ -1132,12 +1460,6 @@ workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
     task.defer(function() if appliquerHUD then appliquerHUD() end end)
 end)
 
-local ombre = creer("Frame", {
-	Name = "OmbreFenetre", Size = UDim2.new(1, 14, 1, 14), Position = UDim2.fromOffset(-7, 7),
-	BackgroundColor3 = Color3.fromRGB(0, 0, 0), BackgroundTransparency = 0.48, BorderSizePixel = 0,
-}, conteneur)
-coins(ombre, 20)
-
 local cadre = creer("CanvasGroup", {
 	Size = UDim2.fromScale(1, 1), BackgroundColor3 = COL.FOND, BorderSizePixel = 0, GroupTransparency = 1,
 }, conteneur)
@@ -1156,15 +1478,15 @@ poigneeRedimensionnement.MouseEnter:Connect(function() poigneeRedimensionnement.
 poigneeRedimensionnement.MouseLeave:Connect(function() poigneeRedimensionnement.TextColor3 = COL.ORCHIDEE end)
 
 local contourFenetre = creer("UIStroke", {
-	Thickness = 1.2, Color = COL.ORCHIDEE, Transparency = 0.28, ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+	Thickness = 1.2, Color = Color3.fromRGB(190, 35, 48), Transparency = 0.22, ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 }, cadre)
 cadre.GroupTransparency = (100 - opaciteFenetre) / 100
 creer("UIGradient", {
 	Rotation = 90,
 	Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, Color3.fromRGB(190, 135, 255)),
-		ColorSequenceKeypoint.new(0.5, Color3.fromRGB(92, 66, 150)),
-		ColorSequenceKeypoint.new(1, Color3.fromRGB(42, 35, 64)),
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 64, 76)),
+		ColorSequenceKeypoint.new(0.5, Color3.fromRGB(130, 28, 39)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(19, 20, 24)),
 	}),
 }, contourFenetre)
 
@@ -1172,102 +1494,210 @@ local voile = creer("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = 
 creer("UIGradient", {
 	Rotation = 90,
 	Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, Color3.fromRGB(34, 25, 58)),
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(22, 12, 15)),
 		ColorSequenceKeypoint.new(0.35, COL.FOND),
 		ColorSequenceKeypoint.new(1, Color3.fromRGB(10, 9, 16)),
 	}),
 }, voile)
 
+-- En-tête nouvelle identité : composition éditoriale, contrastée et minimaliste.
+local fondEntete = creer("Frame", {
+    Name = "FondEntete",
+    Size = UDim2.new(1, 0, 0, HAUT_ENTETE),
+    BackgroundColor3 = Color3.fromRGB(12, 13, 17),
+    BorderSizePixel = 0,
+}, cadre)
+creer("UIGradient", {
+    Rotation = 0,
+    Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(24, 16, 21)),
+        ColorSequenceKeypoint.new(0.52, Color3.fromRGB(15, 16, 21)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(10, 12, 16)),
+    }),
+}, fondEntete)
+
+-- Petit rail rouge vertical : remplace l'ancienne grosse ligne décorative.
+creer("Frame", {
+    Name = "RailEntete",
+    Size = UDim2.fromOffset(3, HAUT_ENTETE - 24),
+    Position = UDim2.fromOffset(0, 12),
+    BackgroundColor3 = Color3.fromRGB(235, 55, 72),
+    BorderSizePixel = 0,
+}, fondEntete)
+
 local entete = creer("Frame", {
-	Size = UDim2.new(1, 0, 0, HAUT_ENTETE), BackgroundTransparency = 1, Active = true,
+    Size = UDim2.new(1, 0, 0, HAUT_ENTETE),
+    BackgroundTransparency = 1,
+    Active = true,
 }, cadre)
 
+-- Logo carré, plus graphique et moins chargé.
 local icone = creer("Frame", {
-	Size = UDim2.fromOffset(34, 34), Position = UDim2.fromOffset(14, 9), BackgroundColor3 = COL.VIOLET,
+    Name = "LogoEntete",
+    Size = UDim2.fromOffset(44, 44),
+    Position = UDim2.fromOffset(20, 10),
+    BackgroundColor3 = Color3.fromRGB(29, 17, 23),
+    BorderSizePixel = 0,
 }, entete)
-pilule(icone)
-creer("UIGradient", { Rotation = 45, Color = ColorSequence.new(COL.ORCHIDEE, Color3.fromRGB(74, 42, 143)) }, icone)
-creer("UIStroke", { Thickness = 1.5, Color = COL.BLANC, Transparency = 0.7, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, icone)
+coins(icone, 12)
+creer("UIStroke", {
+    Thickness = 1.4,
+    Color = Color3.fromRGB(225, 61, 78),
+    Transparency = 0.12,
+    ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+}, icone)
+creer("UIGradient", {
+    Rotation = 135,
+    Color = ColorSequence.new(Color3.fromRGB(53, 22, 32), Color3.fromRGB(18, 15, 21)),
+}, icone)
 local texteIcone = texte(icone, {
-	Size = UDim2.fromScale(1, 1), Text = "AF", Font = Enum.Font.GothamBlack, TextSize = 13,
-	TextXAlignment = Enum.TextXAlignment.Center,
+    Size = UDim2.fromScale(1, 1),
+    Text = "T",
+    Font = Enum.Font.GothamBlack,
+    TextSize = 23,
+    TextColor3 = Color3.fromRGB(255, 91, 105),
+    TextXAlignment = Enum.TextXAlignment.Center,
 })
 local imageIcone = creer("ImageLabel", {
-	Size = UDim2.new(1, -4, 1, -4), Position = UDim2.fromOffset(2, 2), BackgroundTransparency = 1,
-	ScaleType = Enum.ScaleType.Crop, Visible = false,
+    Size = UDim2.new(1, -6, 1, -6),
+    Position = UDim2.fromOffset(3, 3),
+    BackgroundTransparency = 1,
+    ScaleType = Enum.ScaleType.Crop,
+    Visible = false,
 }, icone)
-pilule(imageIcone)
+coins(imageIcone, 9)
 
 local imagesIcones = { imageIcone }
 local textesIcones = { texteIcone }
 local imageSource = nil
+local avatarProfilImage = nil
 
 local function afficherImage(source)
-	imageSource = source
-	for _, i in ipairs(imagesIcones) do
-		i.Image = source
-		i.Visible = true
-	end
-	for _, t in ipairs(textesIcones) do t.Visible = false end
+    imageSource = source
+    for _, i in ipairs(imagesIcones) do
+        i.Image = source
+        i.Visible = true
+    end
+    for _, t in ipairs(textesIcones) do t.Visible = false end
 end
 
 if ID_ROBLOX ~= "" then
-	afficherImage(ID_ROBLOX)
+    afficherImage(ID_ROBLOX)
 else
-	task.spawn(function()
-		pcall(function()
-			local requete = request or http_request or (syn and syn.request)
-			local ecrire = writefile
-			local asset = getcustomasset or getsynasset
-			if not (requete and ecrire and asset) then return end
-			local rep = requete({ Url = URL_ICONE, Method = "GET" })
-			if not rep or not rep.Body or #rep.Body == 0 then return end
-			ecrire("tenebres_icone.png", rep.Body)
-			afficherImage(asset("tenebres_icone.png"))
-		end)
-	end)
+    task.spawn(function()
+        local ok = pcall(function()
+            local ecrire = writefile
+            local asset = getcustomasset or getsynasset
+            if not (ecrire and asset) then return false end
+            local alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+            local function decoderBase64(data)
+                local sortie = {}
+                for i = 1, #data, 4 do
+                    local a = (alphabet:find(data:sub(i, i), 1, true) or 1) - 1
+                    local b = (alphabet:find(data:sub(i + 1, i + 1), 1, true) or 1) - 1
+                    local cchar, dchar = data:sub(i + 2, i + 2), data:sub(i + 3, i + 3)
+                    local c = cchar == "=" and 0 or ((alphabet:find(cchar, 1, true) or 1) - 1)
+                    local d = dchar == "=" and 0 or ((alphabet:find(dchar, 1, true) or 1) - 1)
+                    local n = a * 262144 + b * 4096 + c * 64 + d
+                    sortie[#sortie + 1] = string.char(math.floor(n / 65536) % 256)
+                    if cchar ~= "=" then sortie[#sortie + 1] = string.char(math.floor(n / 256) % 256) end
+                    if dchar ~= "=" then sortie[#sortie + 1] = string.char(n % 256) end
+                end
+                return table.concat(sortie)
+            end
+            ecrire("tenebres_icone.jpg", decoderBase64(IMAGE_EMBARQUEE))
+            afficherImage(asset("tenebres_icone.jpg"))
+            return true
+        end)
+        if not ok and URL_ICONE ~= "" then
+            pcall(function()
+                local requete = request or http_request or (syn and syn.request)
+                local ecrire = writefile
+                local asset = getcustomasset or getsynasset
+                if not (requete and ecrire and asset) then return end
+                local rep = requete({ Url = URL_ICONE, Method = "GET" })
+                if rep and rep.Body and #rep.Body > 0 then
+                    ecrire("tenebres_icone.jpg", rep.Body)
+                    afficherImage(asset("tenebres_icone.jpg"))
+                end
+            end)
+        end
+    end)
 end
 
+-- Bloc marque : titre net, sous-titre secondaire et version intégrée.
 texte(entete, {
-	Size = UDim2.fromOffset(130, 19), Position = UDim2.fromOffset(58, 8),
-	Text = "TÉNÈBRES", Font = Enum.Font.GothamBlack, TextSize = 17,
+    Size = UDim2.fromOffset(205, 27),
+    Position = UDim2.fromOffset(80, 10),
+    Text = "LES TÉNÈBRES",
+    Font = Enum.Font.GothamBlack,
+    TextSize = 21,
+    TextColor3 = Color3.fromRGB(250, 246, 247),
 })
 texte(entete, {
-	Size = UDim2.fromOffset(165, 14), Position = UDim2.fromOffset(58, 31),
-	Text = "MURDER MYSTERY 2 · DARK EDITION", TextColor3 = COL.ORCHIDEE, TextSize = 9,
+    Size = UDim2.fromOffset(230, 13),
+    Position = UDim2.fromOffset(82, 37),
+    Text = "MURDER MYSTERY 2   •   CONTROL CENTER",
+    TextColor3 = Color3.fromRGB(153, 139, 146),
+    TextSize = 9,
+    Font = Enum.Font.GothamMedium,
 })
 
 local version = creer("Frame", {
-	Size = UDim2.fromOffset(44, 20), Position = UDim2.fromOffset(230, 18), BackgroundColor3 = COL.VERT, BorderSizePixel = 0,
+    Name = "BadgeVersion",
+    Size = UDim2.fromOffset(72, 21),
+    Position = UDim2.fromOffset(291, 22),
+    BackgroundColor3 = Color3.fromRGB(42, 22, 29),
+    BorderSizePixel = 0,
 }, entete)
-pilule(version)
+coins(version, 7)
+creer("UIStroke", {
+    Thickness = 1,
+    Color = Color3.fromRGB(157, 49, 65),
+    Transparency = 0.28,
+    ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+}, version)
 texte(version, {
-	Size = UDim2.fromScale(1, 1), Text = "v3.1", TextColor3 = Color3.fromRGB(8, 38, 16),
-	Font = Enum.Font.GothamBold, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Center,
+    Size = UDim2.fromScale(1, 1),
+    Text = "Version 3.1",
+    TextColor3 = Color3.fromRGB(255, 166, 175),
+    Font = Enum.Font.GothamBold,
+    TextSize = 10,
+    TextXAlignment = Enum.TextXAlignment.Center,
 })
 
-local indiceTouches = texte(entete, {
-	Size = UDim2.fromOffset(260, 14), Position = UDim2.new(1, -318, 0, 19),
-	TextColor3 = COL.MUET, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Right,
-})
-local function majIndice()
-	local nom = TOUCHE_REDUIRE and TOUCHE_REDUIRE.Name or "P"
-	indiceTouches.Text = string.format("%s  réduire", nom)
-end
-majIndice()
+-- À droite : bouton de réduction seul, sans indication de raccourci.
 
 local boutonReduire = creer("TextButton", {
-	Name = "BoutonReduire",
-	Size = UDim2.fromOffset(26, 26), Position = UDim2.new(1, -42, 0, 15),
-	BackgroundColor3 = COL.CARTE_CLAIRE, BackgroundTransparency = 0.15, BorderSizePixel = 0,
-	Text = "–", TextColor3 = COL.ORCHIDEE, Font = Enum.Font.GothamBold, TextSize = 18,
-	AutoButtonColor = false, ZIndex = 20,
+    Name = "BoutonReduire",
+    Size = UDim2.fromOffset(38, 38),
+    Position = UDim2.new(1, -58, 0, 13),
+    BackgroundColor3 = Color3.fromRGB(31, 23, 29),
+    BorderSizePixel = 0,
+    Text = "–",
+    TextColor3 = Color3.fromRGB(255, 126, 139),
+    Font = Enum.Font.GothamMedium,
+    TextSize = 22,
+    AutoButtonColor = false,
+    ZIndex = 20,
 }, entete)
-coins(boutonReduire, 8)
-boutonReduire.MouseEnter:Connect(function() boutonReduire.TextColor3 = COL.BLANC end)
-boutonReduire.MouseLeave:Connect(function() boutonReduire.TextColor3 = COL.ORCHIDEE end)
+coins(boutonReduire, 12)
+creer("UIStroke", {
+    Thickness = 1,
+    Color = Color3.fromRGB(104, 58, 68),
+    Transparency = 0.35,
+    ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+}, boutonReduire)
+boutonReduire.MouseEnter:Connect(function()
+    boutonReduire.BackgroundColor3 = Color3.fromRGB(66, 27, 37)
+    boutonReduire.TextColor3 = Color3.fromRGB(255, 239, 241)
+end)
+boutonReduire.MouseLeave:Connect(function()
+    boutonReduire.BackgroundColor3 = Color3.fromRGB(31, 23, 29)
+    boutonReduire.TextColor3 = Color3.fromRGB(255, 126, 139)
+end)
 boutonReduire.Activated:Connect(function()
-	if basculerReduit then basculerReduit() end
+    if basculerReduit then basculerReduit() end
 end)
 
 local ligneEntete = creer("Frame", {
@@ -1277,8 +1707,8 @@ local ligneEntete = creer("Frame", {
 creer("UIGradient", {
 	Color = ColorSequence.new({
 		ColorSequenceKeypoint.new(0, COL.VIOLET),
-		ColorSequenceKeypoint.new(0.6, Color3.fromRGB(60, 54, 96)),
-		ColorSequenceKeypoint.new(1, Color3.fromRGB(34, 32, 50)),
+		ColorSequenceKeypoint.new(0.6, Color3.fromRGB(75, 30, 35)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(29, 24, 26)),
 	}),
 }, ligneEntete)
 
@@ -1287,7 +1717,7 @@ local lateral = creer("Frame", {
 	BackgroundColor3 = COL.LATERAL, BackgroundTransparency = 0.25, BorderSizePixel = 0,
 }, cadre)
 local navigation = creer("ScrollingFrame", {
-	Name = "NavigationCategories", Size = UDim2.new(1, -2, 1, -62), Position = UDim2.fromOffset(0, 0),
+	Name = "NavigationCategories", Size = UDim2.new(1, -2, 1, -110), Position = UDim2.fromOffset(0, 26),
 	BackgroundTransparency = 1, BorderSizePixel = 0, ClipsDescendants = true,
 	ScrollBarThickness = 5, ScrollBarImageColor3 = COL.ORCHIDEE, ScrollBarImageTransparency = 0.1,
 	ScrollingDirection = Enum.ScrollingDirection.Y, CanvasSize = UDim2.new(0, 0, 0, 0),
@@ -1304,6 +1734,12 @@ local contenu = creer("Frame", {
 	BackgroundTransparency = 1, ClipsDescendants = true,
 }, cadre)
 
+texte(lateral, {
+    Size = UDim2.fromOffset(190, 16), Position = UDim2.fromOffset(18, 8),
+    Text = "ESPACE DE CONTRÔLE", TextColor3 = COL.MUET,
+    Font = Enum.Font.GothamBold, TextSize = 11,
+})
+
 local pages = {}
 local onglets = {}
 local ordres = {}
@@ -1319,10 +1755,10 @@ local function creerPage(nom)
 		ScrollBarThickness = 3, ScrollBarImageColor3 = COL.VIOLET,
 		CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y, Visible = false,
 	}, contenu)
-	creer("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, p)
+	creer("UIListLayout", { Padding = UDim.new(0, 9), SortOrder = Enum.SortOrder.LayoutOrder }, p)
 	creer("UIPadding", {
-		PaddingTop = UDim.new(0, 14), PaddingLeft = UDim.new(0, 14),
-		PaddingRight = UDim.new(0, 16), PaddingBottom = UDim.new(0, 14),
+		PaddingTop = UDim.new(0, 16), PaddingLeft = UDim.new(0, 18),
+		PaddingRight = UDim.new(0, 18), PaddingBottom = UDim.new(0, 16),
 	}, p)
 	pages[nom] = p
 	return p
@@ -1332,21 +1768,26 @@ local function selectionner(nom)
 	for n, p in pairs(pages) do p.Visible = (n == nom) end
 	for n, o in pairs(onglets) do
 		local sel = (n == nom)
-		tw(o.bouton, { BackgroundTransparency = sel and 0 or 1, TextColor3 = sel and COL.TEXTE or COL.MUET }, 0.15)
+		tw(o.bouton, {
+            BackgroundTransparency = sel and 0 or 1,
+            BackgroundColor3 = sel and Color3.fromRGB(67, 22, 31) or Color3.fromRGB(28, 20, 23),
+            TextColor3 = sel and COL.BLANC or COL.MUET,
+        }, 0.15)
 		tw(o.barre, { BackgroundTransparency = sel and 0 or 1 }, 0.15)
 	end
 end
 
 local function ajouterOnglet(nom, index)
 	local b = creer("TextButton", {
-		Size = UDim2.new(1, -18, 0, 32), Position = UDim2.fromOffset(8, 7 + (index - 1) * 37),
-		BackgroundColor3 = Color3.fromRGB(49, 39, 78), BackgroundTransparency = 1, Text = "     " .. nom,
-		TextColor3 = COL.MUET, Font = Enum.Font.GothamMedium, TextSize = 13,
+		Size = UDim2.new(1, -24, 0, 40), Position = UDim2.fromOffset(12, 8 + (index - 1) * 46),
+		BackgroundColor3 = Color3.fromRGB(54, 22, 27), BackgroundTransparency = 1, Text = "     " .. nom,
+		TextColor3 = COL.MUET, Font = Enum.Font.GothamMedium, TextSize = 12,
 		TextXAlignment = Enum.TextXAlignment.Left, AutoButtonColor = false,
 	}, navigation)
-	coins(b, 9)
+	coins(b, 11)
+    creer("UIStroke", { Thickness = 1, Color = Color3.fromRGB(100, 36, 48), Transparency = 0.82, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, b)
 	local barre = creer("Frame", {
-		Size = UDim2.fromOffset(3, 22), Position = UDim2.fromOffset(6, 5), BackgroundColor3 = COL.ORCHIDEE,
+		Size = UDim2.fromOffset(4, 28), Position = UDim2.fromOffset(7, 6), BackgroundColor3 = COL.ORCHIDEE,
 		BackgroundTransparency = 1, BorderSizePixel = 0,
 	}, b)
 	pilule(barre)
@@ -1362,42 +1803,58 @@ end
 
 local profil = creer("Frame", {
     Name = "ProfilUtilisateur",
-    Size = UDim2.new(1, 0, 0, 60), Position = UDim2.new(0, 0, 1, -60),
+    Size = UDim2.new(1, 0, 0, 76), Position = UDim2.new(0, 0, 1, -76),
     BackgroundTransparency = 1, ZIndex = 3,
 }, lateral)
 creer("Frame", {
-    Size = UDim2.new(1, -24, 0, 1), Position = UDim2.fromOffset(12, 0),
-    BackgroundColor3 = Color3.fromRGB(44, 42, 64), BorderSizePixel = 0, ZIndex = 3,
+    Size = UDim2.new(1, -28, 0, 1), Position = UDim2.fromOffset(14, 0),
+    BackgroundColor3 = Color3.fromRGB(38, 29, 31), BorderSizePixel = 0, ZIndex = 3,
 }, profil)
 local avatar = creer("ImageLabel", {
     Name = "AvatarProfil",
-    Size = UDim2.fromOffset(34, 34), Position = UDim2.fromOffset(12, 14),
+    Size = UDim2.fromOffset(42, 42), Position = UDim2.fromOffset(14, 17),
     BackgroundColor3 = COL.GRIS, BorderSizePixel = 0, ZIndex = 4,
-    Image = "",
+    Image = imageSource or "",
+    ScaleType = Enum.ScaleType.Crop,
 }, profil)
+avatarProfilImage = avatar
+if imageSource then avatar.Image = imageSource end
 pilule(avatar)
-creer("UIStroke", { Thickness = 1.5, Color = COL.VIOLET, Transparency = 0.3, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, avatar)
+creer("UIStroke", { Thickness = 2, Color = COL.ROUGE, Transparency = 0.12, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, avatar)
+-- Miniature du personnage Roblox, distincte du logo du script.
+-- On attend que Roblox fournisse une miniature prête, puis on la réessaie si nécessaire.
 task.spawn(function()
-    local ok, image = pcall(function()
-        return Players:GetUserThumbnailAsync(joueur.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size100x100)
-    end)
-    if ok and avatar and avatar.Parent then avatar.Image = image end
+    for tentative = 1, 8 do
+        if not avatar or not avatar.Parent then return end
+        local ok, image, pret = pcall(function()
+            return Players:GetUserThumbnailAsync(
+                joueur.UserId,
+                Enum.ThumbnailType.HeadShot,
+                Enum.ThumbnailSize.Size150x150
+            )
+        end)
+        if ok and image and image ~= "" then
+            avatar.Image = image
+            if pret ~= false then return end
+        end
+        task.wait(0.75)
+    end
 end)
 texte(profil, {
-    Size = UDim2.new(1, -60, 0, 16), Position = UDim2.fromOffset(54, 15),
+    Size = UDim2.new(1, -68, 0, 18), Position = UDim2.fromOffset(64, 20),
     Text = joueur.DisplayName, Font = Enum.Font.GothamBold, TextSize = 12,
     TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 4,
 })
 texte(profil, {
-    Size = UDim2.new(1, -60, 0, 14), Position = UDim2.fromOffset(54, 32),
+    Size = UDim2.new(1, -68, 0, 14), Position = UDim2.fromOffset(64, 40),
     Text = "@" .. joueur.Name, TextColor3 = COL.MUET, TextSize = 10,
     TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 4,
 })
 
 local function section(page, titre)
 	local l = texte(page, {
-		Size = UDim2.new(1, 0, 0, 18), Text = string.upper(titre), TextColor3 = COL.MUET,
-		Font = Enum.Font.GothamBold, TextSize = 10,
+		Size = UDim2.new(1, 0, 0, 22), Text = string.upper(titre), TextColor3 = COL.ORCHIDEE,
+		Font = Enum.Font.GothamBlack, TextSize = 11,
 	})
 	l.LayoutOrder = ordre(page)
 	return l
@@ -1405,13 +1862,15 @@ end
 
 local function carte(page, hauteur)
 	local c = creer("Frame", {
-		Size = UDim2.new(1, 0, 0, hauteur), BackgroundColor3 = COL.CARTE, BorderSizePixel = 0,
-		LayoutOrder = ordre(page),
+		Size = UDim2.new(1, 0, 0, hauteur), BackgroundColor3 = Color3.fromRGB(20, 17, 20), BorderSizePixel = 0,
+		LayoutOrder = ordre(page), ClipsDescendants = false,
 	}, page)
-	coins(c, 13)
-	local bordure = creer("UIStroke", { Thickness = 1, Color = COL.BORDURE, Transparency = 0.34, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, c)
-	c.MouseEnter:Connect(function() tw(bordure, { Transparency = 0.12, Color = COL.ORCHIDEE }, 0.14) end)
-	c.MouseLeave:Connect(function() tw(bordure, { Transparency = 0.34, Color = COL.BORDURE }, 0.16) end)
+	coins(c, 16)
+	local bordure = creer("UIStroke", { Thickness = 1, Color = Color3.fromRGB(66, 43, 48), Transparency = 0.18, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, c)
+	local accent = creer("Frame", { Size = UDim2.new(0, 3, 1, -24), Position = UDim2.fromOffset(0, 12), BackgroundColor3 = COL.ROUGE, BorderSizePixel = 0 }, c)
+	coins(accent, 3)
+	c.MouseEnter:Connect(function() tw(bordure, { Transparency = 0, Color = COL.ORCHIDEE }, 0.14); tw(accent, { Size = UDim2.new(0, 5, 1, -18) }, 0.14) end)
+	c.MouseLeave:Connect(function() tw(bordure, { Transparency = 0.18, Color = Color3.fromRGB(66, 43, 48) }, 0.16); tw(accent, { Size = UDim2.new(0, 3, 1, -24) }, 0.16) end)
 	return c
 end
 
@@ -1428,7 +1887,7 @@ local function creerInterrupteurDans(c, x, y, defaut, rappel)
 
 	local etat = defaut
 	local function afficher()
-		tw(piste, { BackgroundColor3 = etat and COL.VIOLET or COL.GRIS }, 0.15)
+		tw(piste, { BackgroundColor3 = etat and COL.ROUGE or Color3.fromRGB(55, 48, 52) }, 0.15)
 		tw(rond, { Position = UDim2.fromOffset(etat and 25 or 3, 3) }, 0.2, Enum.EasingStyle.Back)
 	end
 	piste.Activated:Connect(function()
@@ -1450,14 +1909,14 @@ local function creerInterrupteurDans(c, x, y, defaut, rappel)
 end
 
 local function interrupteur(page, nom, description, defaut, rappel)
-	local c = carte(page, 60)
+	local c = carte(page, 56)
 	texte(c, {
-		Size = UDim2.new(1, -100, 0, 18), Position = UDim2.fromOffset(16, 11),
-		Text = nom, Font = Enum.Font.GothamBold, TextSize = 13,
+		Size = UDim2.new(1, -112, 0, 18), Position = UDim2.fromOffset(22, 11),
+		Text = nom, Font = Enum.Font.GothamBold, TextSize = 12,
 	})
 	texte(c, {
-		Size = UDim2.new(1, -100, 0, 16), Position = UDim2.fromOffset(16, 31),
-		Text = description, TextColor3 = COL.MUET, TextSize = 11, TextTruncate = Enum.TextTruncate.AtEnd,
+		Size = UDim2.new(1, -112, 0, 16), Position = UDim2.fromOffset(22, 31),
+		Text = description, TextColor3 = COL.MUET, TextSize = 10, TextTruncate = Enum.TextTruncate.AtEnd,
 	})
 	return creerInterrupteurDans(c, -62, 18, defaut, rappel)
 end
@@ -1465,12 +1924,12 @@ end
 local function optionCurseur(page, nom, description, minimum, maximum, defaut, suffixe, rappelInterrupteur, rappelValeur)
 	local c = carte(page, 92)
 	texte(c, {
-		Size = UDim2.new(1, -100, 0, 18), Position = UDim2.fromOffset(16, 11),
-		Text = nom, Font = Enum.Font.GothamBold, TextSize = 13,
+		Size = UDim2.new(1, -112, 0, 18), Position = UDim2.fromOffset(22, 11),
+		Text = nom, Font = Enum.Font.GothamBold, TextSize = 12,
 	})
 	texte(c, {
-		Size = UDim2.new(1, -100, 0, 16), Position = UDim2.fromOffset(16, 31),
-		Text = description, TextColor3 = COL.MUET, TextSize = 11, TextTruncate = Enum.TextTruncate.AtEnd,
+		Size = UDim2.new(1, -112, 0, 16), Position = UDim2.fromOffset(22, 31),
+		Text = description, TextColor3 = COL.MUET, TextSize = 10, TextTruncate = Enum.TextTruncate.AtEnd,
 	})
 	local inter = nil
 	if rappelInterrupteur then
@@ -1483,21 +1942,22 @@ local function optionCurseur(page, nom, description, minimum, maximum, defaut, s
 	end
 
 	local piste = creer("Frame", {
-		Size = UDim2.new(1, -100, 0, 6), Position = UDim2.fromOffset(16, 68), BackgroundColor3 = COL.GRIS, BorderSizePixel = 0,
+		-- Piste raccourcie pour garder un espace net avant la valeur.
+		Size = UDim2.new(1, -136, 0, 6), Position = UDim2.fromOffset(22, 64), BackgroundColor3 = COL.GRIS, BorderSizePixel = 0,
 	}, c)
 	pilule(piste)
-	local rempli = creer("Frame", { Size = UDim2.fromScale(0, 1), BackgroundColor3 = COL.VIOLET, BorderSizePixel = 0 }, piste)
+	local rempli = creer("Frame", { Size = UDim2.fromScale(0, 1), BackgroundColor3 = COL.ROUGE, BorderSizePixel = 0 }, piste)
 	pilule(rempli)
-	creer("UIGradient", { Color = ColorSequence.new(COL.VIOLET, COL.ORCHIDEE) }, rempli)
+	creer("UIGradient", { Color = ColorSequence.new(COL.ROUGE, COL.ORCHIDEE) }, rempli)
 	local rond = creer("Frame", {
-		Size = UDim2.fromOffset(16, 16), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0, 0.5),
+		Size = UDim2.fromOffset(12, 12), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0, 0.5),
 		BackgroundColor3 = COL.BLANC, BorderSizePixel = 0, ZIndex = 2,
 	}, piste)
 	pilule(rond)
-	creer("UIStroke", { Thickness = 2, Color = COL.VIOLET, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, rond)
+	creer("UIStroke", { Thickness = 1.5, Color = COL.ROUGE, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, rond)
 
 	local puce = creer("Frame", {
-		Size = UDim2.fromOffset(60, 24), Position = UDim2.new(1, -76, 0, 59), BackgroundColor3 = COL.CARTE_CLAIRE, BorderSizePixel = 0,
+		Size = UDim2.fromOffset(64, 24), Position = UDim2.new(1, -86, 0, 55), BackgroundColor3 = COL.CARTE_CLAIRE, BorderSizePixel = 0,
 	}, c)
 	pilule(puce)
 	local valeurLabel = texte(puce, {
@@ -1506,7 +1966,7 @@ local function optionCurseur(page, nom, description, minimum, maximum, defaut, s
 	})
 
 	local zone = creer("TextButton", {
-		Size = UDim2.new(1, -100, 0, 28), Position = UDim2.fromOffset(16, 57), BackgroundTransparency = 1, Text = "",
+		Size = UDim2.new(1, -136, 0, 28), Position = UDim2.fromOffset(22, 53), BackgroundTransparency = 1, Text = "",
 	}, c)
 
 	local function placer(rel)
@@ -1527,7 +1987,7 @@ local function optionCurseur(page, nom, description, minimum, maximum, defaut, s
 	zone.InputBegan:Connect(function(e)
 		if e.UserInputType == Enum.UserInputType.MouseButton1 or e.UserInputType == Enum.UserInputType.Touch then
 			glisse = true
-			tw(rond, { Size = UDim2.fromOffset(19, 19) }, 0.1)
+			tw(rond, { Size = UDim2.fromOffset(14, 14) }, 0.1)
 			depuisX(e.Position.X)
 		end
 	end)
@@ -1538,7 +1998,7 @@ local function optionCurseur(page, nom, description, minimum, maximum, defaut, s
 	end)
 	UserInputService.InputEnded:Connect(function(e)
 		if e.UserInputType == Enum.UserInputType.MouseButton1 or e.UserInputType == Enum.UserInputType.Touch then
-			if glisse then tw(rond, { Size = UDim2.fromOffset(16, 16) }, 0.1) end
+			if glisse then tw(rond, { Size = UDim2.fromOffset(12, 12) }, 0.1) end
 			glisse = false
 		end
 	end)
@@ -1549,14 +2009,14 @@ end
 local captureEnCours = false
 
 local function carteTouche(page, nom, description, lire, ecrire)
-	local c = carte(page, 60)
+	local c = carte(page, 56)
 	texte(c, {
-		Size = UDim2.new(1, -140, 0, 18), Position = UDim2.fromOffset(16, 11),
-		Text = nom, Font = Enum.Font.GothamBold, TextSize = 13,
+		Size = UDim2.new(1, -140, 0, 18), Position = UDim2.fromOffset(22, 11),
+		Text = nom, Font = Enum.Font.GothamBold, TextSize = 12,
 	})
 	texte(c, {
-		Size = UDim2.new(1, -140, 0, 16), Position = UDim2.fromOffset(16, 31),
-		Text = description, TextColor3 = COL.MUET, TextSize = 11, TextTruncate = Enum.TextTruncate.AtEnd,
+		Size = UDim2.new(1, -140, 0, 16), Position = UDim2.fromOffset(22, 31),
+		Text = description, TextColor3 = COL.MUET, TextSize = 10, TextTruncate = Enum.TextTruncate.AtEnd,
 	})
 	local b = creer("TextButton", {
 		Size = UDim2.fromOffset(100, 28), Position = UDim2.new(1, -116, 0.5, -14),
@@ -1566,7 +2026,7 @@ local function carteTouche(page, nom, description, lire, ecrire)
 	coins(b, 8)
 	creer("UIStroke", { Thickness = 1, Color = COL.BORDURE, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, b)
 	b.MouseEnter:Connect(function()
-		if not captureEnCours then tw(b, { BackgroundColor3 = COL.VIOLET }, 0.12) end
+		if not captureEnCours then tw(b, { BackgroundColor3 = COL.ROUGE }, 0.12) end
 	end)
 	b.MouseLeave:Connect(function()
 		if not captureEnCours then tw(b, { BackgroundColor3 = COL.CARTE_CLAIRE }, 0.12) end
@@ -1585,7 +2045,7 @@ local function carteTouche(page, nom, description, lire, ecrire)
 		if captureEnCours then arreterCapture() return end
 		captureEnCours = true
 		b.Text = "Appuie..."
-		tw(b, { BackgroundColor3 = COL.VIOLET }, 0.12)
+		tw(b, { BackgroundColor3 = COL.ROUGE }, 0.12)
 		connexion = UserInputService.InputBegan:Connect(function(entree)
 			if entree.UserInputType ~= Enum.UserInputType.Keyboard then return end
 			if entree.KeyCode == Enum.KeyCode.Escape then arreterCapture() return end
@@ -1599,14 +2059,14 @@ local function carteTouche(page, nom, description, lire, ecrire)
 end
 
 local function carteBouton(page, nom, description, libelle, couleur, action)
-	local c = carte(page, 60)
+	local c = carte(page, 56)
 	texte(c, {
-		Size = UDim2.new(1, -140, 0, 18), Position = UDim2.fromOffset(16, 11),
-		Text = nom, Font = Enum.Font.GothamBold, TextSize = 13,
+		Size = UDim2.new(1, -140, 0, 18), Position = UDim2.fromOffset(22, 11),
+		Text = nom, Font = Enum.Font.GothamBold, TextSize = 12,
 	})
 	texte(c, {
-		Size = UDim2.new(1, -140, 0, 16), Position = UDim2.fromOffset(16, 31),
-		Text = description, TextColor3 = COL.MUET, TextSize = 11, TextTruncate = Enum.TextTruncate.AtEnd,
+		Size = UDim2.new(1, -140, 0, 16), Position = UDim2.fromOffset(22, 31),
+		Text = description, TextColor3 = COL.MUET, TextSize = 10, TextTruncate = Enum.TextTruncate.AtEnd,
 	})
 	local b = creer("TextButton", {
 		Size = UDim2.fromOffset(100, 28), Position = UDim2.new(1, -116, 0.5, -14),
@@ -1635,18 +2095,18 @@ local contourBarre = creer("UIStroke", {
 	Thickness = 1.5, Color = COL.BLANC, ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 }, barreG)
 creer("UIGradient", {
-	Color = ColorSequence.new(Color3.fromRGB(130, 90, 235), Color3.fromRGB(46, 42, 72)),
+	Color = ColorSequence.new(Color3.fromRGB(220, 38, 55), Color3.fromRGB(42, 25, 29)),
 }, contourBarre)
 local voileBarre = creer("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = COL.BLANC, BorderSizePixel = 0 }, barreG)
 creer("UIGradient", {
-	Color = ColorSequence.new(Color3.fromRGB(38, 28, 68), Color3.fromRGB(15, 15, 21)),
+	Color = ColorSequence.new(Color3.fromRGB(30, 15, 18), Color3.fromRGB(9, 10, 12)),
 }, voileBarre)
 
 local iconeB = creer("Frame", {
 	Size = UDim2.fromOffset(32, 32), Position = UDim2.fromOffset(9, 7), BackgroundColor3 = COL.VIOLET,
 }, barreG)
 pilule(iconeB)
-creer("UIGradient", { Rotation = 45, Color = ColorSequence.new(COL.ORCHIDEE, Color3.fromRGB(74, 42, 143)) }, iconeB)
+creer("UIGradient", { Rotation = 45, Color = ColorSequence.new(COL.ORCHIDEE, Color3.fromRGB(125, 18, 30)) }, iconeB)
 local texteIconeB = texte(iconeB, {
 	Size = UDim2.fromScale(1, 1), Text = "AF", Font = Enum.Font.GothamBlack, TextSize = 12,
 	TextXAlignment = Enum.TextXAlignment.Center,
@@ -1766,7 +2226,8 @@ RunService.RenderStepped:Connect(function()
 		local pulse = 0.12 * math.sin(os.clock() * 4)
 		for p, h in pairs(halos) do
 			if h.Parent and rolesParJoueur[p] == "murder" then
-				h.FillTransparency = math.clamp(opaciteChams / 100 + pulse, 0, 1)
+				h.FillTransparency = transparenceChams / 100
+				h.OutlineTransparency = 0.05
 			end
 		end
 	end
@@ -1963,9 +2424,8 @@ ajouterOnglet("Performance", 6)
 ajouterOnglet("Emotes", 7)
 ajouterOnglet("Fun", 8)
 ajouterOnglet("Auto Farm", 9)
-ajouterOnglet("Apparence", 10)
-ajouterOnglet("Outils", 11)
-ajouterOnglet("Paramètres", 12)
+ajouterOnglet("Outils", 10)
+ajouterOnglet("Paramètres", 11)
 
 creerPage("Protection")
 creerPage("Chams & Info")
@@ -1976,49 +2436,8 @@ creerPage("Performance")
 creerPage("Emotes")
 creerPage("Fun")
 creerPage("Auto Farm")
-creerPage("Apparence")
 creerPage("Outils")
 creerPage("Paramètres")
-
-local themeActuel = valeurConfig("themeUI", "Violet")
-local palettesThemes = {
-    ["Violet"] = {VIOLET=Color3.fromRGB(139,92,246), ORCHIDEE=Color3.fromRGB(205,160,255), FOND=Color3.fromRGB(13,12,20), LATERAL=Color3.fromRGB(18,16,29), CARTE=Color3.fromRGB(25,23,39), CARTE_CLAIRE=Color3.fromRGB(39,35,58), BORDURE=Color3.fromRGB(86,68,125), GRIS=Color3.fromRGB(57,52,76), TEXTE=Color3.fromRGB(246,243,255), MUET=Color3.fromRGB(164,156,190)},
-    ["Bleu"] = {VIOLET=Color3.fromRGB(65,130,255), ORCHIDEE=Color3.fromRGB(145,200,255), FOND=Color3.fromRGB(9,14,24), LATERAL=Color3.fromRGB(13,21,36), CARTE=Color3.fromRGB(19,30,48), CARTE_CLAIRE=Color3.fromRGB(29,45,68), BORDURE=Color3.fromRGB(55,100,160), GRIS=Color3.fromRGB(43,59,82), TEXTE=Color3.fromRGB(240,247,255), MUET=Color3.fromRGB(150,175,205)},
-    ["Rouge"] = {VIOLET=Color3.fromRGB(215,65,90), ORCHIDEE=Color3.fromRGB(255,135,155), FOND=Color3.fromRGB(17,10,16), LATERAL=Color3.fromRGB(26,14,23), CARTE=Color3.fromRGB(38,20,31), CARTE_CLAIRE=Color3.fromRGB(58,29,44), BORDURE=Color3.fromRGB(125,55,78), GRIS=Color3.fromRGB(72,38,51), TEXTE=Color3.fromRGB(255,242,246), MUET=Color3.fromRGB(190,150,165)},
-    ["Émeraude"] = {VIOLET=Color3.fromRGB(34,180,130), ORCHIDEE=Color3.fromRGB(120,240,195), FOND=Color3.fromRGB(8,17,16), LATERAL=Color3.fromRGB(12,25,23), CARTE=Color3.fromRGB(17,35,31), CARTE_CLAIRE=Color3.fromRGB(26,51,45), BORDURE=Color3.fromRGB(45,115,96), GRIS=Color3.fromRGB(36,66,58), TEXTE=Color3.fromRGB(240,255,249), MUET=Color3.fromRGB(145,190,176)},
-}
-local paletteCourante = {}
-for k,v in pairs(COL) do paletteCourante[k] = v end
-local function couleurMappee(c, ancienne, nouvelle)
-    if typeof(c) ~= "Color3" then return c end
-    for nom, avant in pairs(ancienne) do
-        if typeof(avant) == "Color3" and c == avant and nouvelle[nom] then return nouvelle[nom] end
-    end
-    return c
-end
-local function appliquerTheme(nom)
-    local nouvelle = palettesThemes[nom] or palettesThemes["Violet"]
-    local ancienne = {}
-    for k,v in pairs(paletteCourante) do ancienne[k] = v end
-    for k,v in pairs(nouvelle) do COL[k] = v end
-    paletteCourante = {}
-    for k,v in pairs(COL) do paletteCourante[k] = v end
-    for _,obj in ipairs(gui:GetDescendants()) do
-        for _,prop in ipairs({"BackgroundColor3", "TextColor3", "ImageColor3", "BorderColor3", "Color"}) do
-            local ok, val = pcall(function() return obj[prop] end)
-            if ok and typeof(val) == "Color3" then
-                local mapped = couleurMappee(val, ancienne, nouvelle)
-                if mapped ~= val then pcall(function() obj[prop] = mapped end) end
-            elseif ok and typeof(val) == "ColorSequence" then
-                local points = {}
-                for _,kp in ipairs(val.Keypoints) do table.insert(points, ColorSequenceKeypoint.new(kp.Time, couleurMappee(kp.Value, ancienne, nouvelle))) end
-                pcall(function() obj[prop] = ColorSequence.new(points) end)
-            end
-        end
-    end
-    themeActuel = nom
-    if contourFenetre then pcall(function() contourFenetre.Color = COL.ORCHIDEE end) end
-end
 
 section(pages["Protection"], "Statistiques de session")
 local carteStats = carte(pages["Protection"], 76)
@@ -2095,27 +2514,25 @@ interrupteur(pages["Chams & Info"], "Chams arme tombée", "Affiche l'arme tombé
 	armeActive = v
 	if not v then retirerArme() end
 end)
-interrupteur(pages["Chams & Info"], "Noms & distance", "Nom, rôle et distance au-dessus de chaque joueur", false, function(v)
+interrupteur(pages["Chams & Info"], "Pseudo au-dessus de la tête", "Affiche uniquement le pseudo au-dessus de chaque joueur", false, function(v)
 	nomsActifs = v
 	if not v then for p in pairs(etiquettes) do retirerEtiquette(p) end end
 end)
-interrupteur(pages["Chams & Info"], "Afficher les innocents", "Désactive pour ne voir que les rôles importants", true, function(v)
-	innocentsVisibles = v
-end)
-optionCurseur(pages["Chams & Info"], "Opacité des chams", "Plus la valeur est haute, plus le joueur est transparent",
-	0, 90, opaciteChams, "%", nil, function(v) opaciteChams = v end)
 
 section(pages["Déplacement"], "Mouvement")
 optionCurseur(pages["Déplacement"], "Vitesse de marche", "Modifie la vitesse de ton personnage", 16, 120, vitesseVal, "",
 	function(v)
 		vitesseOn = v
-		if not v and humanoide then humanoide.WalkSpeed = 16 end
+		if not v and humanoide then humanoide.WalkSpeed = vitesseOrigine end
 	end,
 	function(v) vitesseVal = v end)
 optionCurseur(pages["Déplacement"], "Puissance de saut", "Modifie la hauteur de tes sauts", 50, 250, sautVal, "",
 	function(v)
 		sautOn = v
-		if not v and humanoide then humanoide.JumpPower = 50 end
+		if not v and humanoide then
+			humanoide.JumpPower = sautOrigine
+			humanoide.UseJumpPower = useJumpPowerOrigine
+		end
 	end,
 	function(v) sautVal = v end)
 interrupteur(pages["Déplacement"], "Fly / Vol", "WASD/ZQSD ou flèches pour voler, vise avec la caméra, Espace/Ctrl pour monter/descendre, Shift pour accélérer", flyControl.flyOn, function(v)
@@ -2152,20 +2569,20 @@ do
 local pageTP = pages["Joueur"]
 section(pageTP, "Liste des joueurs")
 
+-- Puissance conservée à sa valeur actuelle (100 %), sans carte de réglage.
 local puissanceFling = 1
-optionCurseur(pageTP, "Puissance du fling", "Intensité de la percussion (100 % = éjection large)", 50, 300, 100, "%", nil, function(v)
-    puissanceFling = v / 100
-end)
+local avanceFling = 1   -- avance de visée du fling : 1 = valeur calculée (monte si ça passe derrière la cible, baisse si ça passe devant)
 
 local entrees = {}
 
 local flingVers
 do
-    local TAILLE_IMPACT   = Vector3.new(10, 10, 10)
+    local TAILLE_IMPACT   = Vector3.new(12, 12, 12)   -- +2 : marge de contact pour les cibles mobiles
     local DENSITE_IMPACT  = 250
     local PULSES          = 3
     local INTERVALLE      = 0.12
-    local DUREE_MAX       = 2.0
+    local DUREE_MAX       = 5.0
+    local DUREE_CONTACT   = 0.35                       -- on continue à percuter après le premier contact
     local FORCE_BASE      = 380
     local RECUL           = 0.35
 
@@ -2275,7 +2692,6 @@ do
         local debut = os.clock()
         local prochainPulse = 0
         local pulses = 0
-        local touche = false
         local fini = false
         local conn = nil
 
@@ -2349,76 +2765,152 @@ do
             Vector3.new(2.25, 1.5, -2.25), Vector3.new(-2.25, -1.5, 2.25),
             Vector3.new(0, 1.5, 2.25), Vector3.new(0, -1.5, -2.25),
         }
-        -- CORRECTION : le cube d'impact mesure 10 studs de côté, soit une demi-largeur de 5.
-        -- Tant que le centre du cube reste à moins de PORTEE_VERROU du HumanoidRootPart visé,
-        -- la cible est forcément à l'intérieur du cube et la pénétration est créée. Au-delà,
-        -- le cube passe à côté : c'était la cause exacte des flings qui rataient les cibles rapides.
-        local PORTEE_VERROU = 4.5
-        -- Anticipation exprimée en nombre de pas physiques, et non en studs absolus.
-        local HORIZON_ANTICIPATION = 1.5
-        -- Plafond de l'anticipation seule, pour qu'elle ne consomme jamais tout le verrou.
-        local ANTICIPATION_MAX = 3
-        conn = RunService.Heartbeat:Connect(function(dt)
+        -- ===== Interception des cibles en mouvement =====
+        -- Le cube est posé là où la cible sera quand SON client le verra. Les retards
+        -- réseau de notre cube et de la cible s'annulent : il ne reste que le délai de
+        -- vue de son client, soit ping/2 + interpolation, PAS un aller-retour complet.
+        local PORTEE_VERROU = 8     -- au-delà, le cube sort de la cible : plafond dur
+        local LEAD_MAX = 6          -- demi-largeur utile du cube
+        local VITESSE_MOUVEMENT = 8
+        local historique = {}
+        local pingS = 0.08
+        local prochainPing = 0
+        local vitesseDepartH = Vector3.zero
+        local vitesseDiag = 0
+        local contactAt = nil
+
+        local function lirePing()
+            local ms
+            pcall(function()
+                ms = game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue()
+            end)
+            if type(ms) ~= "number" then return nil end
+            return math.clamp(ms, 0, 600) / 1000
+        end
+        pingS = lirePing() or pingS
+
+        local function vitesseMesuree(posActuelle, tNow, vRapportee)
+            local dernier = historique[#historique]
+            if not dernier or tNow - dernier.t >= 0.012 then
+                historique[#historique + 1] = { t = tNow, p = posActuelle }
+            end
+            while #historique > 1 and tNow - historique[1].t > 0.3 do
+                table.remove(historique, 1)
+            end
+            local v = Vector3.zero
+            local premier = historique[1]
+            local dtH = tNow - premier.t
+            if dtH > 0.06 then v = (posActuelle - premier.p) / dtH end
+            if vRapportee.Magnitude > v.Magnitude and vRapportee.Magnitude < 120 then v = vRapportee end
+            return v
+        end
+
+        local function appliquerImpact(cf, lin, ang)
+            racineDepart.CFrame = cf
+            racineDepart.AssemblyLinearVelocity = lin
+            racineDepart.AssemblyAngularVelocity = ang
+        end
+
+        local function diag()
+            return string.format(" · %.1fs · %dms · v%d", os.clock() - debut, math.floor(pingS * 1000 + 0.5), math.floor(vitesseDiag + 0.5))
+        end
+
+        local function etape()
             if fini then return end
             if fermee then return terminer("Fling arrêté", COL.ORANGE) end
             if racine ~= racineDepart or not racineDepart.Parent then
                 return terminer("Fling arrêté : perso changé", COL.ORANGE)
             end
-            local t = os.clock() - debut
+            if humanoideDepart and humanoideDepart.Health <= 0 then
+                return terminer("Fling arrêté : tu es mort", COL.ORANGE)
+            end
+            local tNow = os.clock()
+            local t = tNow - debut
 
             local perso = cible.Character
             local rp = perso and perso:FindFirstChild("HumanoidRootPart")
             if not rp or not rp:IsDescendantOf(workspace) then
                 return terminer("Cible perdue", COL.ROUGE)
             end
-            derniere = rp.Position
+            local posCible = rp.Position
+            derniere = posCible
 
-            -- Cible déjà éjectée : on arrête.
-            if t > 0.25 and (rp.AssemblyLinearVelocity.Magnitude > 500 or (rp.Position - departCible).Magnitude > 250) then
-                touche = true
-                return terminer("Cible percutée", COL.VERT)
+            local v = vitesseMesuree(posCible, tNow, rp.AssemblyLinearVelocity)
+            local vH = Vector3.new(v.X, 0, v.Z)
+            local vitesseH = vH.Magnitude
+            if t < 0.15 then vitesseDepartH = vH end
+            vitesseDiag = vitesseH
+
+            -- Détection d'impact
+            if t > 0.25 then
+                local trajectoire = departCible + vitesseDepartH * t
+                local ecart = (posCible - trajectoire).Magnitude
+                if rp.AssemblyLinearVelocity.Magnitude > 180 or ecart > 120 then
+                    if not contactAt then
+                        contactAt = tNow
+                        -- Relance de la pression au moment du contact : sans cela, un
+                        -- contact rasant sur cible mobile ne transfère presque rien.
+                        pcall(function() poussoir.Velocity = Vector3.new(9e8, 9e8, 9e8) end)
+                    end
+                end
+            end
+            -- On continue à percuter un court instant après le contact : c'est
+            -- l'accumulation sur plusieurs frames qui produit l'envoi.
+            if contactAt and tNow - contactAt > DUREE_CONTACT then
+                return terminer("Percutée" .. diag(), COL.VERT)
             end
             if t >= DUREE_MAX then
-                return terminer("Fling terminé sans effet visible", COL.MUET)
+                return terminer(contactAt and ("Percutée" .. diag()) or ("Sans effet" .. diag()),
+                    contactAt and COL.VERT or COL.MUET)
             end
 
-            -- Collision continue : on s'accroche à la cible en tournoyant autour d'elle.
+            if tNow >= prochainPing then
+                prochainPing = tNow + 1
+                pingS = lirePing() or pingS
+            end
+
             cycle = cycle % #DECALAGES + 1
             angle = angle + 100
-            local tete = perso:FindFirstChild("Head")
-            local base = ((cycle % 3 == 0) and tete and tete:IsA("BasePart")) and tete or rp
-            local hum = perso:FindFirstChildOfClass("Humanoid")
 
-            -- CORRECTION : l'anticipation est calculée sur la VRAIE vitesse horizontale de la
-            -- cible (et non sur MoveDirection, qui décrit l'entrée clavier et pointe à l'opposé
-            -- quand la cible est projetée), sur un horizon court d'un peu plus d'un pas physique,
-            -- puis bornée pour ne jamais dépasser le rayon de recouvrement à elle seule.
-            local vitesseCible = rp.AssemblyLinearVelocity
-            local vitesseHorizontale = Vector3.new(vitesseCible.X, 0, vitesseCible.Z)
-            local directionCible = Vector3.zero
-            if vitesseHorizontale.Magnitude > 0.5 then
-                directionCible = vitesseHorizontale.Unit
-            elseif hum then
-                directionCible = hum.MoveDirection
+            local lead = Vector3.zero
+            if not contactAt and vitesseH > 1 then
+                -- Délai de vue du client de la cible uniquement.
+                local horizon = math.clamp((pingS * 0.5 + 0.06) * avanceFling, 0.03, 0.30)
+                -- Balayage serré : ±25 % sur 0,9 s, pour rester dans la cible.
+                local balayage = 1 + 0.25 * math.sin(2 * math.pi * t / 0.9)
+                lead = vH * (horizon * balayage)
+                if lead.Magnitude > LEAD_MAX then lead = lead.Unit * LEAD_MAX end
             end
-            local pas = math.clamp(dt or 0, 0, 0.1)
-            local anticipation = directionCible
-                * math.min(vitesseHorizontale.Magnitude * pas * HORIZON_ANTICIPATION, ANTICIPATION_MAX)
+            lead = lead + Vector3.new(0, math.clamp(v.Y * 0.1, -3, 3), 0)
 
-            -- CORRECTION : le décalage total (offset de cycle + anticipation) est ramené dans le
-            -- rayon de verrou, ce qui garantit le recouvrement géométrique quelle que soit la vitesse.
-            local decalage = DECALAGES[cycle] + anticipation
+            local base = rp
+            local decalage
+            if contactAt then
+                -- Phase de percussion : planté sur la cible, plus aucune avance.
+                decalage = Vector3.new(0, 0.5, 0)
+            elseif vitesseH > VITESSE_MOUVEMENT then
+                -- Cible en mouvement : avance + micro-oscillation latérale.
+                local lateral = Vector3.new(-vH.Z, 0, vH.X) / vitesseH * (math.sin(tNow * 20) * 0.4)
+                decalage = lead + lateral + Vector3.new(0, (cycle % 2 == 0) and 0.8 or -0.8, 0)
+            else
+                local tete = perso:FindFirstChild("Head")
+                if cycle % 3 == 0 and tete and tete:IsA("BasePart") then base = tete end
+                decalage = DECALAGES[cycle] + lead
+            end
             if decalage.Magnitude > PORTEE_VERROU then
                 decalage = decalage.Unit * PORTEE_VERROU
             end
 
-            pcall(function()
-                racineDepart.CFrame = CFrame.new(base.Position + decalage)
-                    * CFrame.Angles(math.rad(angle), math.rad(math.random(0, 360)), math.rad(math.random(0, 360)))
-                racineDepart.AssemblyLinearVelocity = Vector3.new(9e7, 9e7 * 10, 9e7) * puissanceFling
-                racineDepart.AssemblyAngularVelocity = Vector3.new(9e8, 9e8, 9e8)
-            end)
-        end)
+            pcall(appliquerImpact,
+                CFrame.new(base.Position + decalage)
+                    * CFrame.Angles(math.rad(angle), math.rad(math.random(0, 360)), math.rad(math.random(0, 360))),
+                Vector3.new(9e7, 9e7 * 10, 9e7) * puissanceFling,
+                Vector3.new(9e8, 9e8, 9e8))
+        end
+
+        local cA = RunService.Stepped:Connect(etape)
+        local cB = RunService.Heartbeat:Connect(etape)
+        conn = { Disconnect = function() cA:Disconnect() cB:Disconnect() end }
 
         if notifierInterface then notifierInterface("FLING sur " .. cible.DisplayName, COL.ROUGE, "fling_debut_" .. tostring(os.clock())) end
     end
@@ -2461,11 +2953,11 @@ local function creerEntree(autre)
 
     texte(c, {
         Size = UDim2.new(1, -186, 0, 18), Position = UDim2.fromOffset(56, 10),
-        Text = autre.DisplayName, Font = Enum.Font.GothamBold, TextSize = 13, TextTruncate = Enum.TextTruncate.AtEnd,
+        Text = autre.DisplayName, Font = Enum.Font.GothamBold, TextSize = 12, TextTruncate = Enum.TextTruncate.AtEnd,
     })
     local sub = texte(c, {
         Size = UDim2.new(1, -186, 0, 16), Position = UDim2.fromOffset(56, 29),
-        Text = "@" .. autre.Name, TextColor3 = COL.MUET, TextSize = 11, TextTruncate = Enum.TextTruncate.AtEnd,
+        Text = "@" .. autre.Name, TextColor3 = COL.MUET, TextSize = 10, TextTruncate = Enum.TextTruncate.AtEnd,
     })
 
     local b = creer("TextButton", {
@@ -2532,9 +3024,7 @@ flyControl.farm = {
 	margeVerticale = 60,
 	eviterMurder = valeurConfig("eviterMurderFarm", true),
 	flingFin = valeurConfig("flingFinOn", false),
-	tpLobbyFin = valeurConfig("tpLobbyOn", false),
 	resetPlein = valeurConfig("resetPleinOn", false),
-	lancerAuDemarrage = valeurConfig("autoFarmDemarrage", false),
 	arreter = nil,
 }
 
@@ -2547,19 +3037,22 @@ local GRIS_PISTE = Color3.fromRGB(72, 72, 78)
 local BLEU_PISTE = Color3.fromRGB(56, 132, 255)
 local JAUNE_PIECE = Color3.fromRGB(235, 200, 80)
 
-local DISTANCE_CONTACT = 6      -- distance 3D à partir de laquelle on "touche" la pièce
-local DUREE_CONTACT = 0.6       -- temps max pour que la pièce soit récoltée
+local DISTANCE_CONTACT = 4      -- détecte la pièce de près pour la ramasser en passant
+local DUREE_CONTACT = 0.30      -- passage bref : retente puis passe rapidement à la suivante
 local RAYON_LOBBY = 80
 local RAYON_ENGAGE = 200        -- on ne démarre que si une pièce est à moins de 200 studs
-local PROFONDEUR_SOUS_PIECE = 3
+local PROFONDEUR_SOUS_PIECE = 1
 local RAYON_MURDER = 30         -- pièces ignorées si le murder est à moins de 30 studs
 local ECHECS_SAC_PLEIN = 4      -- échecs d'affilée avant de considérer le sac plein
 local COOLDOWN_RESET = 45
-local DELAI_ABANDON = 20
+local DELAI_ABANDON = 3
 local ACCEL = 70                -- studs/s² : montée en vitesse
 local GAIN_HYSTERESIS = 0.65    -- nouvelle cible adoptée si < 65 % de la distance actuelle
-local INTERVALLE_RECHECK = 0.25 -- fréquence de recherche d'une meilleure cible
-local INTERVALLE_TOUCH = 0.08   -- fréquence des firetouchinterest en contact
+local INTERVALLE_RECHECK = 0.08 -- recherche rapide des cibles pour garder un mouvement continu
+local INTERVALLE_TOUCH = 0.04   -- retente le contact plus souvent pendant le passage
+local PARAMS_RAYON_SOL = RaycastParams.new()
+PARAMS_RAYON_SOL.FilterType = Enum.RaycastFilterType.Exclude
+PARAMS_RAYON_SOL.IgnoreWater = true
 
 -- État interne
 local armee = false             -- l'interrupteur est activé
@@ -2587,6 +3080,7 @@ local prochainSac = 0
 local debutFarm = nil
 local maintien = nil
 local vitesseActuelle = 0
+local dernierMouvementSansCible = 0
 local prochainRecheck = 0
 local prochainTouch = 0
 local interAuto
@@ -2755,52 +3249,144 @@ local function ajouterPiece(obj)
 	return true
 end
 
-local function construireIndex()
-	if constructionIndex then return end
-	constructionIndex = true
-	task.spawn(function()
-		local pile = { workspace }
-		local n = 0
-		while #pile > 0 and not fermee do
-			local conteneur = table.remove(pile)
-			for _, obj in ipairs(conteneur:GetChildren()) do
-				if obj:IsA("BasePart") then
-					ajouterPiece(obj)
-				elseif obj:IsA("Model") or obj:IsA("Folder") then
-					if not (obj:IsA("Model") and Players:GetPlayerFromCharacter(obj)) then
-						pile[#pile + 1] = obj
-					end
-				end
-				n = n + 1
-				if n % 150 == 0 then task.wait() end
-			end
+-- Filtre bon marché (sans allocation) : condition NÉCESSAIRE pour qu'un objet soit une pièce.
+-- Il écarte immédiatement les milliers de morceaux de map qui n'ont rien à voir avec les pièces,
+-- au lieu de les mettre en file puis de leur faire subir les tests complets.
+local function nomPieceRapide(nom)
+	return string.find(nom, "[Cc][Oo][Ii][Nn]") ~= nil or string.find(nom, "[Cc][Aa][Nn][Dd][Yy]") ~= nil
+end
+local function candidatPiece(obj)
+	if nomPieceRapide(obj.Name) then return true end
+	local p = obj.Parent
+	return p ~= nil and p ~= workspace and nomPieceRapide(p.Name)
+end
+
+-- Indexation progressive : ne pas parcourir toute la map d'un seul coup au lancement.
+local indexDemande = false
+local fileAjouts = {}
+local ajoutsEnFile = {}
+local traitementAjouts = false
+local connexionIndexAjout, connexionIndexSuppression = nil, nil
+local mettreEnFile
+local generationIndex = 0
+local verifierLobbyPourIndex = nil
+
+local function deconnecterIndexWorkspace()
+	-- Invalide aussi les workers en cours pour qu'ils cessent immédiatement leur scan.
+	generationIndex = generationIndex + 1
+	indexDemande = false
+	if connexionIndexAjout then connexionIndexAjout:Disconnect(); connexionIndexAjout = nil end
+	if connexionIndexSuppression then connexionIndexSuppression:Disconnect(); connexionIndexSuppression = nil end
+	table.clear(fileAjouts)
+	table.clear(ajoutsEnFile)
+	traitementAjouts = false
+	constructionIndex = false
+end
+
+local function connecterIndexWorkspace()
+	if connexionIndexAjout then return end
+	indexDemande = true
+	connexionIndexAjout = workspace.DescendantAdded:Connect(function(obj)
+		-- Ce listener n'existe que pendant l'Auto Farm actif et après le chargement de map.
+		if not armee or fermee then return end
+		if obj:IsA("BasePart") then
+			if candidatPiece(obj) then mettreEnFile(obj) end
+		elseif obj:IsA("TouchTransmitter") then
+			local p = obj.Parent
+			if p and candidatPiece(p) then mettreEnFile(obj) end
 		end
-		constructionIndex = false
+	end)
+	connexionIndexSuppression = workspace.DescendantRemoving:Connect(function(obj)
+		if not armee or not piecesConnues[obj] then return end
+		task.defer(function()
+			if obj:IsDescendantOf(workspace) or not piecesConnues[obj] then return end
+			piecesConnues[obj] = nil
+			avaitTI[obj] = nil
+			piecesVivantes = math.max(0, piecesVivantes - 1)
+		end)
 	end)
 end
 
-workspace.DescendantAdded:Connect(function(obj)
-	if fermee then return end
-	if obj:IsA("BasePart") then
-		task.delay(0.25, function()
-			if fermee or not obj.Parent then return end
-			ajouterPiece(obj)
-		end)
-	elseif obj:IsA("TouchTransmitter") and obj.Parent then
-		ajouterPiece(obj.Parent)
-	end
-end)
-
-workspace.DescendantRemoving:Connect(function(obj)
-	if not piecesConnues[obj] then return end
-	task.defer(function()
-		if obj:IsDescendantOf(workspace) then return end
-		if not piecesConnues[obj] then return end
-		piecesConnues[obj] = nil
-		avaitTI[obj] = nil
-		piecesVivantes = math.max(0, piecesVivantes - 1)
+mettreEnFile = function(obj)
+	if not indexDemande or not armee or fermee or not obj then return end
+	if fileAjouts[obj] then return end
+	fileAjouts[obj] = true
+	ajoutsEnFile[#ajoutsEnFile + 1] = obj
+	if traitementAjouts then return end
+	traitementAjouts = true
+	local generation = generationIndex
+	task.spawn(function()
+		local tete = 1
+		while tete <= #ajoutsEnFile and not fermee and armee and generation == generationIndex do
+			-- Petit budget de traitement pour éviter un pic CPU lors des ajouts de pièces.
+			local t0 = os.clock()
+			while tete <= #ajoutsEnFile and os.clock() - t0 < 0.002 and armee and generation == generationIndex do
+				local item = ajoutsEnFile[tete]
+				tete = tete + 1
+				fileAjouts[item] = nil
+				if item and item.Parent then
+					if item:IsA("BasePart") then
+						ajouterPiece(item)
+					elseif item:IsA("TouchTransmitter") and item.Parent then
+						ajouterPiece(item.Parent)
+					end
+				end
+			end
+			if tete <= #ajoutsEnFile then task.wait() end
+		end
+		if generation == generationIndex then
+			table.clear(ajoutsEnFile)
+			traitementAjouts = false
+		end
 	end)
-end)
+end
+
+local function construireIndex()
+	if constructionIndex then return end
+	constructionIndex = true
+	local generation = generationIndex
+	task.spawn(function()
+		-- N'analyse jamais Workspace pendant Waiting for turn / Loading Map.
+		-- Attend que le personnage soit sorti du lobby, puis laisse le streaming se stabiliser.
+		while not fermee and armee and generation == generationIndex
+			and (not racine or not racine.Parent or (verifierLobbyPourIndex and verifierLobbyPourIndex())) do
+			task.wait(0.5)
+		end
+		if fermee or not armee or generation ~= generationIndex then
+			if generation == generationIndex then constructionIndex = false end
+			return
+		end
+		task.wait(1.5)
+		if fermee or not armee or generation ~= generationIndex then
+			if generation == generationIndex then constructionIndex = false end
+			return
+		end
+		connecterIndexWorkspace()
+		local pile = { workspace }
+		local t0 = os.clock()
+		while #pile > 0 and not fermee and armee and generation == generationIndex do
+			local conteneur = table.remove(pile)
+			if conteneur and conteneur.Parent then
+				local enfants = conteneur:GetChildren()
+				for _, obj in ipairs(enfants) do
+					if not armee or generation ~= generationIndex then break end
+					if obj:IsA("BasePart") then
+						if candidatPiece(obj) then ajouterPiece(obj) end
+					elseif obj:IsA("Model") or obj:IsA("Folder") then
+						if not (obj:IsA("Model") and Players:GetPlayerFromCharacter(obj)) then
+							pile[#pile + 1] = obj
+						end
+					end
+					if os.clock() - t0 > 0.002 then
+						task.wait()
+						t0 = os.clock()
+					end
+				end
+			end
+		end
+		if generation == generationIndex then constructionIndex = false end
+	end)
+end
 
 local function compacterListe()
 	if #piecesListe < 80 then return end
@@ -2845,22 +3431,30 @@ local function positionMurder()
 end
 
 local function choisirCible(position, murderPos)
-	local meilleure, meilleureD = nil, math.huge
 	local t = os.clock()
-	for i = 1, #piecesListe do
-		local p = piecesListe[i]
-		local finAbandon = abandonnees[p]
-		if recoltable(p) and not (finAbandon and finAbandon > t) then
-			local pp = p.Position
-			if math.abs(pp.Y - referenceY) <= farmCfg.margeVerticale then
-				if not (murderPos and (pp - murderPos).Magnitude < RAYON_MURDER) then
+	local meilleure, meilleureD = nil, math.huge
+	-- Passe 1 : privilégie les pièces qui ne sont pas en délai de réessai.
+	for passe = 1, 2 do
+		meilleure, meilleureD = nil, math.huge
+		for i = 1, #piecesListe do
+			local p = piecesListe[i]
+			local finAbandon = abandonnees[p]
+			local enDelai = finAbandon and finAbandon > t
+			if recoltable(p) and ((passe == 1 and not enDelai) or passe == 2) then
+				local pp = p.Position
+				if math.abs(pp.Y - referenceY) <= farmCfg.margeVerticale
+					and not (murderPos and (pp - murderPos).Magnitude < RAYON_MURDER) then
 					local d = (pp - position).Magnitude
+					-- En seconde passe, pénalise une pièce encore en délai pour choisir
+					-- une autre pièce si elle est disponible, sans laisser le farm s'arrêter.
+					if enDelai then d = d + 12 end
 					if d < meilleureD then meilleure, meilleureD = p, d end
 				end
 			end
 		end
+		if meilleure then return meilleure end
 	end
-	return meilleure
+	return nil
 end
 
 -- ------------------------------ Lobby ------------------------------
@@ -2890,6 +3484,8 @@ local function estAuLobby()
 	if not lobbyCentreCache then return false end
 	return (racine.Position - lobbyCentreCache).Magnitude < RAYON_LOBBY
 end
+
+verifierLobbyPourIndex = estAuLobby
 
 local function trouverLobby()
 	local centre = centreLobby()
@@ -3029,15 +3625,7 @@ end
 
 local function actionFin()
 	if estAuLobby() then return end
-	local r = racine
-	if farmCfg.tpLobbyFin then
-		if r and r.Parent then
-			pcall(function()
-				r.AssemblyLinearVelocity = Vector3.zero
-				r.CFrame = trouverLobby()
-			end)
-		end
-	elseif farmCfg.flingFin and flingGlobal then
+	if farmCfg.flingFin and flingGlobal then
 		for p, role in pairs(rolesParJoueur) do
 			if role == "murder" and p ~= joueur and p.Parent == Players then
 				flingGlobal(p)
@@ -3058,11 +3646,20 @@ local function guiVisible(o)
 	return true
 end
 
+local sacsCache, tRechercheSacs = nil, 0
 local function sacPleinUI()
 	local pg = joueur:FindFirstChildOfClass("PlayerGui")
 	if not pg then return nil end
-	local sacs = pg:FindFirstChild("CoinBags", true)
-	if not sacs then return nil end
+	local sacs = sacsCache
+	if not (sacs and sacs:IsDescendantOf(pg)) then
+		-- Recherche récursive dans tout le PlayerGui : au plus toutes les 3 s au lieu de 2 fois par seconde.
+		local t = os.clock()
+		if t - tRechercheSacs < 3 then return nil end
+		tRechercheSacs = t
+		sacs = pg:FindFirstChild("CoinBags", true)
+		sacsCache = sacs
+		if not sacs then return nil end
+	end
 	for _, o in ipairs(sacs:GetDescendants()) do
 		if o:IsA("GuiObject") then
 			if string.lower(o.Name) == "full" and guiVisible(o) then return true end
@@ -3116,7 +3713,7 @@ local function pas(dt)
 
 	if t >= prochaineAnalyse then
 		prochaineAnalyse = t + 0.2
-		analyser(r.Position)
+		DIAG.mesure("analyse", analyser, r.Position)
 		if restantes > 0 and restantesAvant == 0 then nouvelleManche() end
 		restantesAvant = restantes
 	end
@@ -3168,8 +3765,9 @@ local function pas(dt)
 			sacPleinDetecte(h)
 		end
 	end
-	-- Maintien : pas de pcall/closure par frame
-	r.AssemblyLinearVelocity = Vector3.zero
+	-- Le maintien est piloté par la direction du déplacement plus bas.
+	-- Ne pas remettre la vélocité à zéro à chaque frame : cela provoquait
+	-- des à-coups et entrait en conflit avec le déplacement du farm.
 	r.AssemblyAngularVelocity = Vector3.zero
 
 	-- Choix / validité de la cible
@@ -3204,11 +3802,21 @@ local function pas(dt)
 		end
 	end
 	if not cible then
-		vitesseActuelle = 0
-		etatTexte = "Aucune pièce atteignable (murder ou hauteur)"
+		-- Une absence momentanée de cible ne doit pas provoquer un freinage brutal.
+		-- On conserve brièvement l'élan, puis on s'immobilise si aucune pièce n'existe.
+		if t - dernierMouvementSansCible > 0.22 then
+			vitesseActuelle = 0
+			if maintien and maintien.Parent then maintien.Velocity = Vector3.zero end
+		else
+			if maintien and maintien.Parent then maintien.Velocity = derniereDirection * math.min(vitesseActuelle, farmCfg.vitesse) end
+		end
+		etatTexte = "Recherche de pièce"
 		return
 	end
+	dernierMouvementSansCible = t
 
+	-- Mémorise la position avant la tentative de collecte : si la pièce est
+	-- marquée comme ratée pendant cette frame, le déplacement continue quand même.
 	local cp = cible.Position
 	local pos = r.Position
 	local distance = (cp - pos).Magnitude
@@ -3224,12 +3832,14 @@ local function pas(dt)
 		if tempsContact >= DUREE_CONTACT then
 			-- La pièce est toujours là : échec (sac plein ou pièce inutilisable).
 			local connaissaitTI = avaitTI[cible]
-			abandonnees[cible] = t + DELAI_ABANDON
-			cible = nil
+			abandonnees[cible] = t + 0.45 -- courte pause de réessai pour éviter de boucler sur la même pièce
+			cible = choisirCible(pos, murderPos) -- choisit tout de suite la prochaine cible
 			enContact = false
 			tempsContact = 0
 			if connaissaitTI then echecs = echecs + 1 end
-			return
+			-- Le mouvement continue vers l'ancienne position pendant cette frame;
+			-- la prochaine frame prend la nouvelle cible sans imposer de pause.
+		else
 		end
 	else
 		enContact = false
@@ -3239,7 +3849,34 @@ local function pas(dt)
 	-- Déplacement lissé : accélération progressive, vitesse conservée entre deux pièces
 	local visee = cp
 	if farmCfg.hauteur == "sous" then
-		visee = visee - Vector3.new(0, PROFONDEUR_SOUS_PIECE, 0)
+		-- Cherche le vrai sol sous la pièce au lieu d'utiliser un décalage fixe
+		-- depuis la pièce : la hauteur des pièces varie selon les cartes.
+		local exclusions = {}
+		if joueur.Character then table.insert(exclusions, joueur.Character) end
+		if cible then table.insert(exclusions, cible) end
+		PARAMS_RAYON_SOL.FilterDescendantsInstances = exclusions
+		local origineRayon = cp + Vector3.new(0, 6, 0)
+		local toucheSol = workspace:Raycast(origineRayon, Vector3.new(0, -40, 0), PARAMS_RAYON_SOL)
+		if toucheSol then
+			-- Place le HumanoidRootPart au-dessus du sol : le décalage négatif
+			-- précédent envoyait le personnage sous le plancher et pouvait le coincer.
+			visee = Vector3.new(cp.X, toucheSol.Position.Y - 0.85, cp.Z)
+		else
+			-- Repli si la carte ne renvoie aucun sol détectable.
+			visee = cp + Vector3.new(0, 2.5, 0)
+		end
+	end
+	-- En arrivant à portée, dépasser légèrement la pièce au lieu de viser son centre :
+	-- cela évite de freiner/osciller sur chaque pièce et garde une trajectoire continue.
+	if distance <= DISTANCE_CONTACT then
+		local directionHorizontale = Vector3.new(cp.X - pos.X, 0, cp.Z - pos.Z)
+		if directionHorizontale.Magnitude < 0.05 then
+			directionHorizontale = Vector3.new(r.CFrame.LookVector.X, 0, r.CFrame.LookVector.Z)
+		end
+		if directionHorizontale.Magnitude > 0.05 then
+			local directionUnitaire = directionHorizontale.Unit
+			visee = visee + directionUnitaire * 3.5
+		end
 	end
 	local versVisee = visee - pos
 	local distVisee = versVisee.Magnitude
@@ -3247,6 +3884,7 @@ local function pas(dt)
 		vitesseActuelle = math.min(farmCfg.vitesse, vitesseActuelle + ACCEL * dt)
 		local pasDistance = math.min(vitesseActuelle * dt, distVisee)
 		local nouvelle = pos + versVisee * (pasDistance / distVisee)
+		if pasDistance > 0.001 then derniereDirection = (nouvelle - pos).Unit end
 		if referenceY then
 			local y = nouvelle.Y
 			local yMin, yMax = referenceY - farmCfg.margeVerticale, referenceY + farmCfg.margeVerticale
@@ -3254,7 +3892,15 @@ local function pas(dt)
 				nouvelle = Vector3.new(nouvelle.X, math.clamp(y, yMin, yMax), nouvelle.Z)
 			end
 		end
-		r.CFrame = cframeOriente(nouvelle)
+		-- Utilise le maintien physique pour déplacer le personnage sans le
+		-- repositionner brutalement par CFrame à chaque frame. La vitesse cible
+		-- vient du déplacement calculé existant : aucune valeur de réglage ne change.
+		if maintien and maintien.Parent then
+			maintien.Velocity = (nouvelle - pos) / math.max(dt, 0.001)
+		end
+		r.CFrame = cframeOriente(r.Position)
+	else
+		if maintien and maintien.Parent then maintien.Velocity = Vector3.zero end
 	end
 end
 
@@ -3267,6 +3913,7 @@ end)
 local function demarrerFarm()
 	if armee then return end
 	armee = true
+	construireIndex()
 	recolteesSession = 0
 	debutFarm = os.clock()
 	prochaineAnalyse = 0
@@ -3278,6 +3925,7 @@ end
 local function arreterFarm()
 	if not armee then return end
 	armee = false
+	deconnecterIndexWorkspace()
 	quitterFarm()
 	etatTexte = "Désactivé"
 	notif("Auto farm arrêté", COL.GRIS)
@@ -3285,6 +3933,7 @@ end
 
 farmCfg.arreter = function()
 	armee = false
+	deconnecterIndexWorkspace()
 	quitterFarm()
 end
 
@@ -3294,7 +3943,7 @@ joueur.CharacterAdded:Connect(function()
 	cible = nil
 	enContact = false
 	tempsContact = 0
-	sacPlein = false
+	-- Ne pas réarmer le reset au respawn : attendre la prochaine manche.
 	echecs = 0
 	flyControl.farmActif = false
 end)
@@ -3305,9 +3954,7 @@ end)
 curseurVert("Vitesse (mode glisse)", "Studs par seconde vers les pièces", 0, 30, farmCfg.vitesse, function(v) farmCfg.vitesse = v end)
 interrupteurVert("Éviter le murder", "Ignore les pièces à moins de 30 studs du murder", farmCfg.eviterMurder, function(v) farmCfg.eviterMurder = v end)
 interrupteurVert("Fling le murder à la fin", "Percute le murder quand il n'y a plus de pièces", farmCfg.flingFin, function(v) farmCfg.flingFin = v end)
-interrupteurVert("TP au lobby à la fin", "Retourne au lobby quand il n'y a plus de pièces", farmCfg.tpLobbyFin, function(v) farmCfg.tpLobbyFin = v end)
 interrupteurVert("Reset quand le sac est plein", "Détecté quand plusieurs pièces de suite ne se ramassent plus", farmCfg.resetPlein, function(v) farmCfg.resetPlein = v end)
-interrupteurVert("Lancer à chaque exécution", "Active l'auto farm tout seul au lancement du script (à sauvegarder)", farmCfg.lancerAuDemarrage, function(v) farmCfg.lancerAuDemarrage = v end)
 
 task.spawn(function()
 	while not fermee do
@@ -3324,12 +3971,6 @@ task.spawn(function()
 	end
 end)
 
-construireIndex()
-
-if farmCfg.lancerAuDemarrage then
-	interAuto.set(true)
-	demarrerFarm()
-end
 end
 construireAutoFarm()
 
@@ -3367,13 +4008,6 @@ interrupteur(pages["Fun"], "Mode disco", "La lumière de la map change de couleu
 	activerDisco(v)
 end)
 
-section(pages["Apparence"], "Thèmes")
-for _,nomTheme in ipairs({"Violet", "Bleu", "Rouge", "Émeraude"}) do
-    carteBouton(pages["Apparence"], "Thème " .. nomTheme, "Applique une palette à l'interface", "Appliquer", COL.VIOLET, function()
-        appliquerTheme(nomTheme)
-    end)
-end
-
 section(pages["Performance"], "Moniteur de performances")
 local cartePerf = carte(pages["Performance"], 92)
 local textePerf = texte(cartePerf, {Size=UDim2.new(1,-24,0,20), Position=UDim2.fromOffset(12,8), Text="FPS : --  ·  Ping : -- ms", Font=Enum.Font.GothamBold, TextSize=12})
@@ -3386,22 +4020,25 @@ for i=1,32 do
 end
 local historiqueFPS = {}
 local dernierTextePerf = 0
+local dernierGraphPerf = 0
 RunService.RenderStepped:Connect(function(dt)
     if fermee then return end
+    local t = os.clock()
+    if t - dernierGraphPerf < 0.1 then return end -- graphique rafraîchi à 10 Hz, pas à chaque frame
+    dernierGraphPerf = t
     local fps = math.floor(fpsActuel + 0.5)
     table.insert(historiqueFPS, math.clamp(fps / 120, 0.08, 1))
-    while #historiqueFPS > #barresPerf do table.remove(historiqueFPS, 1) end
+    if #historiqueFPS > #barresPerf then table.remove(historiqueFPS, 1) end
     for i,b in ipairs(barresPerf) do
         local val = historiqueFPS[i] or 0.08
         b.Size = UDim2.new(1/32,-2,val,0)
         b.BackgroundColor3 = val < 0.35 and COL.ROUGE or (val < 0.6 and COL.VIOLET or COL.ORCHIDEE)
     end
-    local t = os.clock()
-    if t - dernierTextePerf > 0.25 then
+    if t - dernierTextePerf > 0.5 then
         dernierTextePerf = t
         local ping = 0
-        pcall(function() ping = math.floor(game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue()) end)
-        textePerf.Text = string.format("FPS : %d  ·  Ping : %d ms  ·  Frame : %.1f ms", fps, ping, dt * 1000)
+        pcall(function() ping = game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue() end)
+        textePerf.Text = string.format("FPS : %d  ·  Ping : %d ms  ·  Frame : %.1f ms", fps, math.floor(ping + 0.5), dt * 1000)
     end
 end)
 
@@ -3423,12 +4060,6 @@ end)
 carteBouton(pages["Outils"], "Effacer l'historique", "Supprime les entrées du centre de notifications", "Effacer", COL.GRIS, function()
     table.clear(historiqueNotifications)
     if majHistoriqueNotifications then majHistoriqueNotifications() end
-end)
-
-section(pages["Apparence"], "Échelle de l’interface")
-optionCurseur(pages["Apparence"], "Échelle du menu", "Ajuste la taille globale après adaptation automatique", 70, 120, echelleInterface, "%", nil, function(v)
-    echelleInterface = v
-    calculerEchelleEcran()
 end)
 
 ;(function()
@@ -3500,7 +4131,251 @@ end)()
 end
 construireExtras()
 
-if themeActuel ~= "Violet" then appliquerTheme(themeActuel) end
+
+-- ============================ CATÉGORIE GUN ============================
+local function installerGun()
+    local pageGun = creerPage("Gun")
+    ajouterOnglet("Gun", 12)
+
+    -- Réorganisation des onglets
+    local ORDRE_ONGLETS = {
+        "Protection", "Chams & Info", "Déplacement", "Joueur",
+        "Alertes", "Gun", "Performance", "Emotes",
+        "Fun", "Auto Farm", "Outils", "Paramètres",
+    }
+
+    for i, nom in ipairs(ORDRE_ONGLETS) do
+        local o = onglets[nom]
+        if o and o.bouton then
+            o.bouton.Position = UDim2.fromOffset(12, 8 + (i - 1) * 46)
+        end
+    end
+
+    -- ======================== CONFIGURATION ========================
+    local DISTANCE_MAX = 1000
+    local COOLDOWN_GRAB = 1.5
+    local INTERVALLE_SCAN = 0.25
+
+    local autoGrab = false
+    local grabEnCours = false
+    local dernierGrab = 0
+    local derniereRecherche = 0
+    local armeCache = nil
+
+    local labelStatut
+    local labelArme
+
+    -- ======================== INTERFACE ========================
+
+    section(pageGun, "État")
+
+    local carteEtat = carte(pageGun, 65)
+
+    labelStatut = texte(carteEtat, {
+        Size = UDim2.new(1, -28, 0, 18),
+        Position = UDim2.fromOffset(22, 13),
+        Text = "Grab Gun prêt",
+        Font = Enum.Font.GothamBold,
+        TextSize = 12,
+    })
+
+    labelArme = texte(carteEtat, {
+        Size = UDim2.new(1, -28, 0, 16),
+        Position = UDim2.fromOffset(22, 37),
+        Text = "Arme : recherche...",
+        Font = Enum.Font.Code,
+        TextSize = 11,
+        TextColor3 = COL.MUET,
+    })
+
+    local function statut(message, couleur)
+        if labelStatut and labelStatut.Parent then
+            labelStatut.Text = message
+            labelStatut.TextColor3 = couleur or COL.MUET
+        end
+    end
+
+    local function afficherArme(message)
+        if labelArme and labelArme.Parent then
+            labelArme.Text = message
+        end
+    end
+
+    -- ======================== DÉTECTION ========================
+
+    local function trouverGunDrop()
+        -- Même règle que le CHAMS : le cache doit être une BasePart valide.
+        if armeCache and armeCache.Parent and armeCache:IsA("BasePart")
+            and armeCache:IsDescendantOf(workspace) then
+            return armeCache
+        end
+
+        local maintenant = os.clock()
+        if maintenant - derniereRecherche < 0.25 then
+            return nil
+        end
+        derniereRecherche = maintenant
+        armeCache = nil
+
+        -- Recherche récursive : le GunDrop n'est pas forcément directement
+        -- parenté au Workspace et peut être contenu dans un Model ou Folder.
+        local objet = workspace:FindFirstChild("GunDrop", true)
+        if not objet then return nil end
+
+        if objet:IsA("BasePart") then
+            armeCache = objet
+        else
+            armeCache = objet:FindFirstChildWhichIsA("BasePart", true)
+        end
+        return armeCache
+    end
+
+    local function possedeGun()
+        local personnage = joueur.Character
+        local sac = joueur:FindFirstChildOfClass("Backpack")
+
+        local function verifier(conteneur)
+            if not conteneur then return false end
+
+            for _, objet in ipairs(conteneur:GetChildren()) do
+                if objet:IsA("Tool")
+                    and string.find(string.lower(objet.Name), "gun", 1, true) then
+                    return true
+                end
+            end
+
+            return false
+        end
+
+        return verifier(personnage) or verifier(sac)
+    end
+
+    -- ======================== GRAB GUN À DISTANCE ========================
+
+    local function grabGun()
+        if grabEnCours then return end
+
+        if os.clock() - dernierGrab < COOLDOWN_GRAB then
+            return
+        end
+
+        if possedeGun() then
+            statut("Tu possèdes déjà une arme", COL.MUET)
+            return
+        end
+
+        local gunDrop = trouverGunDrop()
+        if not gunDrop then
+            statut("Aucune arme au sol", COL.ROUGE)
+            afficherArme("Arme : introuvable")
+            return
+        end
+
+        local personnage = joueur.Character
+        local root = personnage and personnage:FindFirstChild("HumanoidRootPart")
+        local humanoide = personnage and personnage:FindFirstChildOfClass("Humanoid")
+        if not root or not humanoide or humanoide.Health <= 0 then
+            statut("Personnage indisponible", COL.ROUGE)
+            return
+        end
+
+        local distance = (root.Position - gunDrop.Position).Magnitude
+        afficherArme(string.format("Arme : GunDrop · %.1f studs", distance))
+
+        dernierGrab = os.clock()
+        grabEnCours = true
+        statut("Tentative à distance — sans déplacement", COL.ORANGE)
+
+        -- Ne téléporte jamais le personnage. On peut seulement demander un
+        -- contact côté client si l'exécuteur expose firetouchinterest ; le
+        -- serveur MM2 reste libre de refuser si le joueur est trop loin.
+        local toucheDisponible = typeof(firetouchinterest) == "function"
+        if toucheDisponible and gunDrop.Parent then
+            pcall(firetouchinterest, root, gunDrop, 0)
+            pcall(firetouchinterest, root, gunDrop, 1)
+        end
+
+        task.wait(0.7)
+        if possedeGun() then
+            statut("Revolver récupéré !", COL.VERT)
+            afficherArme("Arme : dans ton inventaire")
+        elseif not toucheDisponible then
+            statut("Impossible : contact distant non disponible", COL.ROUGE)
+        else
+            statut("Refusé par MM2 : le serveur exige la proximité", COL.ORANGE)
+        end
+
+        grabEnCours = false
+    end
+
+    -- ======================== BOUTONS ========================
+
+    section(pageGun, "Récupération")
+
+    carteBouton(
+        pageGun,
+        "Grab Gun",
+        "Tente le contact à distance sans déplacer ton personnage (le serveur peut refuser)",
+        "GRAB",
+        COL.VIOLET,
+        function()
+            grabGun()
+        end
+    )
+
+    interrupteur(
+        pageGun,
+        "Auto Grab Gun",
+        "Surveille automatiquement l'apparition d'une arme au sol",
+        false,
+        function(v)
+            autoGrab = v
+
+            if v then
+                statut("Surveillance activée", COL.VERT)
+            else
+                statut("Surveillance désactivée", COL.MUET)
+            end
+        end
+    )
+
+    -- ======================== SURVEILLANCE ========================
+
+    task.spawn(function()
+        while not fermee do
+            if autoGrab then
+                if not possedeGun() then
+                    local arme = trouverGunDrop()
+
+                    if arme then
+                        afficherArme("Arme : GunDrop détectée")
+                        grabGun()
+                    else
+                        afficherArme("Arme : aucune")
+                    end
+                else
+                    afficherArme("Arme : déjà possédée")
+                end
+            end
+
+            task.wait(INTERVALLE_SCAN)
+        end
+    end)
+
+    -- ======================== NETTOYAGE ========================
+    -- Aucun listener Workspace permanent : trouverGunDrop valide son cache et
+    -- relance une recherche limitée seulement quand l'utilisateur demande le grab.
+
+    joueur.CharacterAdded:Connect(function()
+        armeCache = nil
+        grabEnCours = false
+        dernierGrab = 0
+    end)
+end
+
+installerGun()
+
+
 fpsLabel.Visible = false
 hudInfos.Visible = false
 
@@ -3515,20 +4390,13 @@ carteTouche(pages["Paramètres"], "Réduire / agrandir", "Clique puis appuie sur
 			end
 		end
 		TOUCHE_REDUIRE = code
-		majIndice()
-	end)
-section(pages["Paramètres"], "Fenêtre")
-optionCurseur(pages["Paramètres"], "Opacité de la fenêtre", "Rends la fenêtre plus ou moins transparente",
-	50, 100, opaciteFenetre, "%", nil,
-	function(v)
-		opaciteFenetre = v
-		cadre.GroupTransparency = (100 - v) / 100
 	end)
 section(pages["Paramètres"], "Préférences")
 carteBouton(pages["Paramètres"], "Sauvegarder les réglages", "Enregistre les valeurs principales pour la prochaine exécution", "Sauver", COL.VIOLET, function()
     local cfg = {
+        version = 2,
         toucheReduireP = TOUCHE_REDUIRE and TOUCHE_REDUIRE.Name or "P",
-        opaciteFenetre = opaciteFenetre, antiAfkOn = antiAfkOn,
+        antiAfkOn = antiAfkOn,
         vitesseOn = vitesseOn, vitesseVal = vitesseVal, sautOn = sautOn, sautVal = sautVal,
         flyOn = flyControl.flyOn, flySpeed = flyControl.flySpeed, noclipOn = flyControl.noclipOn,
         noclipTransp = flyControl.noclipTransp,
@@ -3536,13 +4404,11 @@ carteBouton(pages["Paramètres"], "Sauvegarder les réglages", "Enregistre les v
         gravOn = gravOn, gravVal = gravVal,
         alerteArmeOn = alerteArmeOn, alerteMurderOn = alerteMurderOn, distanceAlerte = distanceAlerte,
         spinVitesse = spinVitesse,
-        themeUI = themeActuel, echelleInterface = echelleInterface,
+        echelleInterface = echelleInterface,
         vitesseFarm = flyControl.farm.vitesse,
         eviterMurderFarm = flyControl.farm.eviterMurder,
         flingFinOn = flyControl.farm.flingFin,
-        tpLobbyOn = flyControl.farm.tpLobbyFin,
         resetPleinOn = flyControl.farm.resetPlein,
-        autoFarmDemarrage = flyControl.farm.lancerAuDemarrage,
     }
     local ok = pcall(function()
         local json = game:GetService("HttpService"):JSONEncode(cfg)
@@ -3557,29 +4423,63 @@ carteBouton(pages["Paramètres"], "Sauvegarder les réglages", "Enregistre les v
 end)
 section(pages["Paramètres"], "Script")
 carteBouton(pages["Paramètres"], "Fermer le script", "Coupe tout et supprime l'interface", "Fermer", COL.ROUGE, function()
-	fermee = true
-    if flyControl.farm and flyControl.farm.arreter then pcall(flyControl.farm.arreter) end
-    flyControl.farmActif = false
-    flyControl.activerFly(false)
-    flyControl.activerNoclip(false)
-	pcall(function() RunService:UnbindFromRenderStep("TenebresNoclipVisuel") end)
-	definirActif(false)
-	antiAfkOn = false
-	if vitesseOn and humanoide then humanoide.WalkSpeed = 16 end
-	if sautOn and humanoide then humanoide.JumpPower = 50 end
-	vitesseOn, sautOn = false, false
-	sautInfiniOn = false
-	if gravOn then workspace.Gravity = gravOrigine gravOn = false end
-	if lumOn then activerLuminosite(false) end
-	if boosterActif then activerBooster(false) end
-	spinOn, arcOn, traineeOn = false, false, false
-	if discoOn then activerDisco(false) end
-	if arcHalo then arcHalo:Destroy() arcHalo = nil end
-	retirerTrainee()
-	tracersActifs, alerteArmeOn, alerteMurderOn = false, false, false
-	rolesActifs, armeActive, nomsActifs = false, false, false
-	nettoyerChams()
-	gui:Destroy()
+    -- Fermeture prioritaire : masquer l'interface avant tout nettoyage.
+    if fermee then return end
+    fermee = true
+    local interface = gui
+    pcall(function()
+        if interface then interface.Enabled = false end
+    end)
+
+    -- Chaque nettoyage est isolé pour qu'une erreur ne puisse pas bloquer
+    -- la fermeture finale de l'interface.
+    pcall(function()
+        if flyControl.farm and flyControl.farm.arreter then
+            flyControl.farm.arreter()
+        end
+    end)
+    pcall(function() flyControl.farmActif = false end)
+    pcall(function() if flyControl.activerFly then flyControl.activerFly(false) end end)
+    pcall(function() if flyControl.activerNoclip then flyControl.activerNoclip(false) end end)
+    pcall(function() RunService:UnbindFromRenderStep("TenebresNoclipVisuel") end)
+    pcall(function() if definirActif then definirActif(false) end end)
+
+    pcall(function() antiAfkOn = false end)
+    pcall(function()
+        if vitesseOn and humanoide then humanoide.WalkSpeed = vitesseOrigine end
+        vitesseOn = false
+    end)
+    pcall(function()
+        if sautOn and humanoide then
+            humanoide.JumpPower = sautOrigine
+            humanoide.UseJumpPower = useJumpPowerOrigine
+        end
+        sautOn = false
+        sautInfiniOn = false
+    end)
+    pcall(function()
+        if gravOn then workspace.Gravity = gravOrigine end
+        gravOn = false
+    end)
+    pcall(function() if lumOn then activerLuminosite(false) end end)
+    pcall(function() if boosterActif then activerBooster(false) end end)
+    pcall(function()
+        spinOn, arcOn, traineeOn = false, false, false
+        if discoOn then activerDisco(false) end
+    end)
+    pcall(function() if arcHalo then arcHalo:Destroy() arcHalo = nil end end)
+    pcall(function() if retirerTrainee then retirerTrainee() end end)
+
+    pcall(function()
+        tracersActifs, alerteArmeOn, alerteMurderOn = false, false, false
+        rolesActifs, armeActive, nomsActifs = false, false, false
+        if nettoyerChams then nettoyerChams() end
+    end)
+
+    -- Dernière opération : détruire la fenêtre même si un module a échoué.
+    pcall(function()
+        if interface then interface:Destroy() end
+    end)
 end)
 
 selectionner("Protection")
@@ -3673,3 +4573,26 @@ UserInputService.InputBegan:Connect(function(entree, pris)
 end)
 
 tw(cadre, { GroupTransparency = (100 - opaciteFenetre) / 100 }, 0.4)
+
+-- Détecteur de gel : une frame de plus de 250 ms est consignée avec le module suspect,
+-- le temps passé dans l'écouteur du workspace et l'état des modules actifs.
+do
+	local derniere = os.clock()
+	local dernierGel = 0
+	RunService.Heartbeat:Connect(function()
+		local t = os.clock()
+		local dt = t - derniere
+		derniere = t
+		if fermee then return end
+		if dt > 0.25 and t - dernierGel > 3 then
+			dernierGel = t
+			local suspect = (t - DIAG.tSuspect < 1.5) and DIAG.suspect or "aucun"
+			DIAG.consigner(string.format("Gel %d ms · évts %d ms (%d) · suspect %s · farm %s fly %s noclip %s anti %s",
+				math.floor(dt * 1000), math.floor(DIAG.msEvts), DIAG.nbEvts, suspect,
+				flyControl.farmActif and "ON" or "off", flyControl.flyOn and "ON" or "off",
+				flyControl.noclipOn and "ON" or "off", actif and "ON" or "off"))
+		end
+		-- Les compteurs ne couvrent que l'intervalle entre deux frames : remise à zéro à chaque frame.
+		DIAG.msEvts, DIAG.nbEvts = 0, 0
+	end)
+end
