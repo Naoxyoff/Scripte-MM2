@@ -4081,6 +4081,8 @@ end
 -- (murder mort, sheriff/héros/murder vainqueur) ou qu'aucune pièce n'est récoltée depuis longtemps.
 local murderVu, tMurderAbsent = false, nil
 local murderNom = nil
+local vuLobbyApresFin = false
+local prochainVerifSacPlein = 0
 local pauseStallJusqua, derniereRecolte = 0, 0
 local DELAI_SANS_RECOLTE = 25
 local DELAI_MURDER_ABSENT = 2.5
@@ -4237,6 +4239,32 @@ local function pas(dt)
 	end
 
 	local auLobby = estAuLobby()
+	-- Retour au lobby = fin du blocage TPA
+	if auLobby then flyControl.farmBloqueTP = nil end
+	-- Verrou de fin de manche : levé au retour du lobby puis départ vers la map (modes sans rôles
+	-- comme Zombie), ou par de nouveaux rôles, ou après 120 s au maximum.
+	if latchFinManche then
+		if auLobby then
+			vuLobbyApresFin = true
+		elseif (vuLobbyApresFin and t - tFinManche > 8) or t - tFinManche > 120 then
+			latchFinManche, vuLobbyApresFin = false, false
+			nouvelleManche()
+		end
+	end
+	-- Correctif : le "sac plein" n'était jamais revérifié une fois posé (la vérification
+	-- n'avait lieu que pendant le farm). Il se levait seulement à la manche suivante, ce qui
+	-- bloquait le farm indéfiniment dans les modes sans changement de manche (Zombie).
+	if sacPlein and t >= prochainVerifSacPlein then
+		prochainVerifSacPlein = t + 0.5
+		if sacPleinUI() == false then
+			sacPlein = false
+			resetFaitManche = false
+			echecs = 0
+			etatResetSac.sacPlein = false
+			etatResetSac.resetFait = false
+			notif("Sac vidé : farm repris", VERT_ON)
+		end
+	end
 	local mort = joueursElimines[joueur.Name] == true
 
 	-- Fin de manche : événement serveur (mancheTerminee) OU murder disparu après avoir été vu
@@ -4263,7 +4291,7 @@ local function pas(dt)
 		end
 	end
 
-	local finManche = mancheTerminee or finMurder or latchFinManche
+	local finManche = finMurder or latchFinManche
 
 	-- Blocage : aucune pièce récoltée depuis trop longtemps -> pause puis nouvel essai
 	if enFarm and t - derniereRecolte > DELAI_SANS_RECOLTE then
