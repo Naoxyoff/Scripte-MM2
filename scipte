@@ -123,21 +123,10 @@ local function sauvegarderConfig(extra)
     return ok, erreur
 end
 
+-- Sauvegarde MANUELLE uniquement : les changements sont gardés en mémoire pour la session
+-- et ne sont écrits dans le fichier que lorsque tu appuies sur le bouton « Sauver ».
 local function enregistrerConfig(cle, valeur)
     configRuntime[cle] = valeur
-    if sauvegardeEnAttente then return end
-    sauvegardeEnAttente = true
-    task.delay(0.8, function()
-        sauvegardeEnAttente = false
-        local ok, erreur = sauvegarderConfig()
-        if not ok then
-            -- Correctif : l'echec de la sauvegarde auto n'est plus silencieux
-            warn("[Tenebres] Sauvegarde auto impossible : " .. tostring(erreur))
-            environnementGlobal.__TENEBRES_ERR_SAUVEGARDE = tostring(erreur)
-        else
-            environnementGlobal.__TENEBRES_ERR_SAUVEGARDE = nil
-        end
-    end)
 end
 
 local function lireTouche(nom, defaut)
@@ -5003,8 +4992,6 @@ do
 local function fermerScript()
 
     if fermee then return end
-    -- Correctif : sauvegarde finale avant de tout couper
-    pcall(sauvegarderConfig)
     fermee = true
     local interface = gui
     pcall(function()
