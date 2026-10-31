@@ -3430,7 +3430,8 @@ local RAYON_LOBBY = 80
 local RAYON_ENGAGE = 200
 local PROFONDEUR_SOUS_PIECE = 1
 local RAYON_MURDER = 30
-local ECHECS_SAC_PLEIN = 4
+local ECHECS_SAC_PLEIN = 8
+local GRACE_PERTE = 1.5
 local COOLDOWN_RESET = 45
 local DELAI_ABANDON = 3
 local ACCEL = 70
@@ -3487,6 +3488,8 @@ local prochainRecheck = 0
 local prochainTouch = 0
 local derniereDistance, tempsSansProgres, ancienneCible = math.huge, 0, nil
 local DELAI_BLOCAGE = 1.5
+local perduDepuis = nil
+local dernierArretConsigne = 0
 local interAuto
 
 local function notif(message, couleur)
@@ -4178,14 +4181,14 @@ local function guiVisible(o)
 end
 
 local sacsCache, tRechercheSacs = nil, 0
-local function sacPleinUI()
+local function sacPleinUI(force)
 	local pg = joueur:FindFirstChildOfClass("PlayerGui")
 	if not pg then return nil end
 	local sacs = sacsCache
 	if not (sacs and sacs:IsDescendantOf(pg)) then
 
 		local t = os.clock()
-		if t - tRechercheSacs < 3 then return nil end
+		if t - tRechercheSacs < 3 and not force then return nil end
 		tRechercheSacs = t
 		sacs = pg:FindFirstChild("CoinBags", true)
 		sacsCache = sacs
@@ -4351,6 +4354,8 @@ local function pas(dt)
 	local finManche = finMurder or latchFinManche
 
 	-- Blocage : aucune pièce récoltée depuis trop longtemps -> pause puis nouvel essai
+	if restantes < restantesAvant then derniereRecolte = t end
+	restantesAvant = restantes
 	if enFarm and t - derniereRecolte > DELAI_SANS_RECOLTE then
 		pauseStallJusqua = t + 25
 		derniereRecolte = t
@@ -4359,8 +4364,31 @@ local function pas(dt)
 	local engage = restantes > 0 and not auLobby and distanceMin <= RAYON_ENGAGE and not sacPlein and not mort
 		and not finManche and t >= pauseStallJusqua
 
+	-- Tolérance : une perte passagère (liste de pièces vide une fraction de seconde, murder qui
+	-- disparaît/réapparaît, pièce la plus proche un peu trop loin) ne doit plus couper le farm.
+	-- Le farm ne s'arrête immédiatement que pour une vraie raison : sac plein, éliminé, lobby,
+	-- fin de manche annoncée ou pause volontaire.
+	local raisonFerme = sacPlein or mort or auLobby or latchFinManche or t < pauseStallJusqua
+	if engage then
+		perduDepuis = nil
+	elseif enFarm and not raisonFerme then
+		perduDepuis = perduDepuis or t
+		if t - perduDepuis < GRACE_PERTE then engage = true end
+	end
+
 	if not engage then
-		if enFarm then quitterFarm() end
+		perduDepuis = nil
+		if enFarm then
+			if t - dernierArretConsigne > 3 then
+				dernierArretConsigne = t
+				local raison = (sacPlein and "sac plein") or (mort and "éliminé") or (auLobby and "lobby")
+					or (latchFinManche and "fin de manche") or (t < pauseStallJusqua and "aucune pièce récoltée depuis 25 s")
+					or (restantes == 0 and "plus de pièces") or (finManche and "murder absent")
+					or "pièces trop loin"
+				DIAG.consigner("Farm en pause : " .. raison)
+			end
+			quitterFarm()
+		end
 		if restantes == 0 then
 			etatTexte = "En attente de la prochaine manche"
 			if aFarme and not finTraitee then
@@ -4401,6 +4429,12 @@ local function pas(dt)
 		prochainSac = t + 0.5
 		local ui = sacPleinUI()
 		uiSacDispo = ui ~= nil
+		if ui == nil and echecs >= ECHECS_SAC_PLEIN and recoltesManche >= 40 then
+			-- Avant de conclure « sac plein » sur de simples échecs de ramassage, on relit
+			-- vraiment l'interface : si elle dit que le sac n'est pas plein, on continue.
+			ui = sacPleinUI(true)
+			if ui == false then echecs = 0 end
+		end
 		if ui == true or (ui == nil and echecs >= ECHECS_SAC_PLEIN and recoltesManche >= 40) then
 			sacPleinDetecte(h)
 		end
