@@ -82,6 +82,41 @@ pcall(function()
         if type(decode) == "table" then configChargee = decode end
     end
 end)
+-- Statistiques persistantes indépendantes des préférences d’interface.
+local FICHIER_STATS = "tenebres_mm2_stats.json"
+local statsMM2 = {
+    piecesTotal = 0, manches = 0, survieSecondes = 0, survies = 0,
+    victoires = { murder = 0, sherif = 0, innocent = 0 },
+    sessionPieces = 0,
+}
+pcall(function()
+    if isfile and readfile and isfile(FICHIER_STATS) then
+        local donnees = game:GetService("HttpService"):JSONDecode(readfile(FICHIER_STATS))
+        if type(donnees) == "table" then
+            statsMM2.piecesTotal = math.max(0, tonumber(donnees.piecesTotal) or 0)
+            statsMM2.manches = math.max(0, tonumber(donnees.manches) or 0)
+            statsMM2.survieSecondes = math.max(0, tonumber(donnees.survieSecondes) or 0)
+            statsMM2.survies = math.max(0, tonumber(donnees.survies) or 0)
+            if type(donnees.victoires) == "table" then
+                for _, role in ipairs({"murder", "sherif", "innocent"}) do
+                    statsMM2.victoires[role] = math.max(0, tonumber(donnees.victoires[role]) or 0)
+                end
+            end
+        end
+    end
+end)
+local function sauvegarderStatsMM2()
+    pcall(function()
+        if type(writefile) ~= "function" then return end
+        writefile(FICHIER_STATS, game:GetService("HttpService"):JSONEncode(statsMM2))
+    end)
+end
+local function ajouterPieceStats()
+    statsMM2.piecesTotal = statsMM2.piecesTotal + 1
+    statsMM2.sessionPieces = statsMM2.sessionPieces + 1
+    sauvegarderStatsMM2()
+end
+
 local function valeurConfig(cle, defaut)
     local v = configChargee[cle]
     if v == nil or type(v) ~= type(defaut) then return defaut end
@@ -286,6 +321,24 @@ local function nouveauPersonnage(perso)
 	racine, humanoide = r, h
 	if actif then derniereSure = r.CFrame end
 end
+
+local debutVieStats = nil
+local function suivreSurvieStats(personnage)
+    local h = personnage and personnage:FindFirstChildOfClass("Humanoid")
+    if not h then h = personnage and personnage:WaitForChild("Humanoid", 10) end
+    if not h then return end
+    debutVieStats = os.clock()
+    connecter(h.Died, function()
+        if debutVieStats then
+            statsMM2.survieSecondes = statsMM2.survieSecondes + math.max(0, os.clock() - debutVieStats)
+            statsMM2.survies = statsMM2.survies + 1
+            debutVieStats = nil
+            sauvegarderStatsMM2()
+        end
+    end)
+end
+connecter(joueur.CharacterAdded, suivreSurvieStats)
+if joueur.Character then task.spawn(suivreSurvieStats, joueur.Character) end
 
 connecter(joueur.CharacterAdded, nouveauPersonnage)
 connecter(joueur.CharacterRemoving, function()
@@ -910,7 +963,25 @@ do
 			connecter(o.OnClientEvent, function(...)
 				if fermee then return end
 				if finManche then
-
+                    statsMM2.manches = statsMM2.manches + 1
+                    -- N’enregistre une victoire que si le payload de l’événement indique explicitement le rôle gagnant.
+                    local roleGagnant = nil
+                    for i = 1, select("#", ...) do
+                        local arg = select(i, ...)
+                        if type(arg) == "string" then
+                            local txt = string.lower(arg)
+                            if string.find(txt, "murder", 1, true) then roleGagnant = "murder"
+                            elseif string.find(txt, "sheriff", 1, true) or string.find(txt, "sherif", 1, true) then roleGagnant = "sherif"
+                            elseif string.find(txt, "innocent", 1, true) or string.find(txt, "hero", 1, true) then roleGagnant = "innocent" end
+                        elseif type(arg) == "table" then
+                            local txt = string.lower(tostring(arg.Winner or arg.winner or arg.WinningRole or arg.winningRole or ""))
+                            if string.find(txt, "murder", 1, true) then roleGagnant = "murder"
+                            elseif string.find(txt, "sheriff", 1, true) or string.find(txt, "sherif", 1, true) then roleGagnant = "sherif"
+                            elseif string.find(txt, "innocent", 1, true) or string.find(txt, "hero", 1, true) then roleGagnant = "innocent" end
+                        end
+                    end
+                    if roleGagnant then statsMM2.victoires[roleGagnant] = statsMM2.victoires[roleGagnant] + 1 end
+                    sauvegarderStatsMM2()
 					mancheTerminee = true
 					latchFinManche, tFinManche = true, os.clock()
 					finMancheEnAttente = true
@@ -2534,17 +2605,18 @@ end)
 
 end
 
-ajouterOnglet("Protection", 1)
-ajouterOnglet("Chams & Info", 2)
-ajouterOnglet("Déplacement", 3)
-ajouterOnglet("Joueur", 4)
-ajouterOnglet("Alertes", 5)
-ajouterOnglet("Performance", 6)
-ajouterOnglet("Emotes", 7)
-ajouterOnglet("Fun", 8)
-ajouterOnglet("Auto Farm", 9)
-ajouterOnglet("Outils", 10)
-ajouterOnglet("Paramètres", 11)
+ajouterOnglet("Statistiques", 1)
+ajouterOnglet("Protection", 2)
+ajouterOnglet("Chams & Info", 3)
+ajouterOnglet("Déplacement", 4)
+ajouterOnglet("Joueur", 5)
+ajouterOnglet("Alertes", 6)
+ajouterOnglet("Performance", 7)
+ajouterOnglet("Emotes", 8)
+ajouterOnglet("Fun", 9)
+ajouterOnglet("Auto Farm", 10)
+ajouterOnglet("Outils", 11)
+ajouterOnglet("Paramètres", 12)
 
 creerPage("Protection")
 creerPage("Chams & Info")
@@ -2557,7 +2629,9 @@ creerPage("Fun")
 creerPage("Auto Farm")
 creerPage("Outils")
 creerPage("Paramètres")
+creerPage("Statistiques")
 
+do
 section(pages["Protection"], "Statistiques de session")
 local carteStats = carte(pages["Protection"], 76)
 local texteStats = texte(carteStats, {
@@ -2572,6 +2646,114 @@ task.spawn(function()
         task.wait(1)
     end
 end)
+
+section(pages["Statistiques"], "Résumé de ta session")
+local carteStatsGlobales = carte(pages["Statistiques"], 218)
+local grilleStats = creer("Frame", {
+    Name = "GrilleResumeStatistiques", BackgroundTransparency = 1, BorderSizePixel = 0,
+    Position = UDim2.fromOffset(10, 10), Size = UDim2.new(1, -20, 1, -20),
+}, carteStatsGlobales)
+creer("UIGridLayout", {
+    CellSize = UDim2.new(0.5, -5, 0, 56), CellPadding = UDim2.fromOffset(8, 7),
+    SortOrder = Enum.SortOrder.LayoutOrder,
+}, grilleStats)
+local tuilesStats = {}
+local definitionsTuiles = {
+    {"Pièces de la session", "0", COL.ROUGE},
+    {"Total sauvegardé", "0", COL.ORCHIDEE},
+    {"Rythme de collecte", "0 pièces / h", COL.ROUGE},
+    {"Manches détectées", "0", COL.ORCHIDEE},
+    {"Survie moyenne", "00 min 00 sec", COL.ROUGE},
+    {"Victoires par rôle", "Murder 0  ·  Sheriff 0  ·  Innocent 0", COL.ORCHIDEE},
+}
+for i, definition in ipairs(definitionsTuiles) do
+    local tuile = creer("Frame", {
+        Name = "TuileStat" .. i, LayoutOrder = i, BackgroundColor3 = Color3.fromRGB(24, 22, 27),
+        BackgroundTransparency = 0.08, BorderSizePixel = 0,
+    }, grilleStats)
+    coins(tuile, 8)
+    creer("UIStroke", {Color = definition[3], Transparency = 0.55, Thickness = 1}, tuile)
+    texte(tuile, {
+        Size = UDim2.new(1, -14, 0, 17), Position = UDim2.fromOffset(8, 6),
+        Text = string.upper(definition[1]), TextColor3 = COL.MUET, TextSize = 9,
+        Font = Enum.Font.GothamMedium, TextXAlignment = Enum.TextXAlignment.Left,
+    })
+    tuilesStats[i] = texte(tuile, {
+        Size = UDim2.new(1, -14, 0, 25), Position = UDim2.fromOffset(8, 24),
+        Text = definition[2], TextColor3 = COL.TEXTE, TextSize = (i == 6) and 9 or 14,
+        Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+    })
+end
+section(pages["Statistiques"], "Rythme de collecte")
+local carteGraphique = carte(pages["Statistiques"], 156)
+texte(carteGraphique, {
+    Size = UDim2.new(1, -24, 0, 20), Position = UDim2.fromOffset(12, 8),
+    Text = "Pièces ramassées toutes les 10 secondes · récent à droite", TextColor3 = COL.MUET, TextSize = 10,
+})
+local barresGraphique = {}
+for i = 1, 12 do
+    local barre = creer("Frame", {
+        Name = "BarrePieces" .. i, AnchorPoint = Vector2.new(0, 1),
+        Position = UDim2.new((i - 1) / 12, 12, 1, -31),
+        Size = UDim2.new(1 / 12, -5, 0, 3), BackgroundColor3 = COL.ROUGE, BorderSizePixel = 0,
+    }, carteGraphique)
+    coins(barre, 3)
+    barresGraphique[i] = barre
+end
+texte(carteGraphique, {
+    Size = UDim2.new(1, -24, 0, 14), Position = UDim2.new(0, 12, 1, -22),
+    Text = "Faible collecte  ←                         →  Forte collecte", TextColor3 = COL.MUET, TextSize = 9,
+})
+local historiquePieces = {}
+local piecesDernierEchantillon = statsMM2.sessionPieces
+local tDernierEchantillon = os.clock()
+local boutonResetStats = creer("TextButton", {
+    Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = Color3.fromRGB(55, 22, 30),
+    BorderSizePixel = 0, Text = "Réinitialiser les statistiques de session",
+    TextColor3 = COL.TEXTE, Font = Enum.Font.GothamBold, TextSize = 11, AutoButtonColor = true,
+}, pages["Statistiques"])
+coins(boutonResetStats, 10)
+connecter(boutonResetStats.Activated, function()
+    statsMM2.sessionPieces = 0
+    table.clear(historiquePieces)
+    piecesDernierEchantillon = 0
+    tDernierEchantillon = os.clock()
+    for _, barre in ipairs(barresGraphique) do barre.Size = UDim2.new(barre.Size.X.Scale, barre.Size.X.Offset, 0, 3) end
+end)
+
+task.spawn(function()
+    while not fermee do
+        local duree = math.max(1, os.clock() - debutSession)
+        local moyenneSurvie = statsMM2.survies > 0 and (statsMM2.survieSecondes / statsMM2.survies) or 0
+        local piecesHeure = statsMM2.sessionPieces * 3600 / duree
+        tuilesStats[1].Text = tostring(statsMM2.sessionPieces)
+        tuilesStats[2].Text = tostring(statsMM2.piecesTotal)
+        tuilesStats[3].Text = string.format("%.0f pièces / h", piecesHeure)
+        tuilesStats[4].Text = tostring(statsMM2.manches)
+        tuilesStats[5].Text = string.format("%02d min %02d sec", math.floor(moyenneSurvie / 60), math.floor(moyenneSurvie) % 60)
+        tuilesStats[6].Text = string.format("Murder %d  ·  Sheriff %d  ·  Innocent %d",
+            statsMM2.victoires.murder, statsMM2.victoires.sherif, statsMM2.victoires.innocent)
+        local maintenant = os.clock()
+        if maintenant - tDernierEchantillon >= 10 then
+            local gain = math.max(0, statsMM2.sessionPieces - piecesDernierEchantillon)
+            table.insert(historiquePieces, gain)
+            while #historiquePieces > 12 do table.remove(historiquePieces, 1) end
+            piecesDernierEchantillon, tDernierEchantillon = statsMM2.sessionPieces, maintenant
+            local maximum = 1
+            for _, v in ipairs(historiquePieces) do maximum = math.max(maximum, v) end
+            for i, barre in ipairs(barresGraphique) do
+                local valeur = historiquePieces[#historiquePieces - 12 + i] or 0
+                local hauteur = math.max(3, math.floor(78 * valeur / maximum))
+                barre.Size = UDim2.new(barre.Size.X.Scale, barre.Size.X.Offset, 0, hauteur)
+                barre.BackgroundColor3 = (i == #historiquePieces) and COL.ORCHIDEE or COL.ROUGE
+            end
+        end
+        task.wait(1)
+    end
+end)
+
+end -- portée locale des éléments statistiques
 
 section(pages["Protection"], "Défense")
 interrupteur(pages["Protection"], "Anti Fling", "Bloque les flings et les collisions des joueurs", false, function(v)
@@ -4155,6 +4337,7 @@ local function succes()
 	recoltesManche = recoltesManche + 1
 	recolteesSession = recolteesSession + 1
 	recolteesTotal = recolteesTotal + 1
+    ajouterPieceStats()
 	derniereRecolte = os.clock()
 	echecs = 0
 end
@@ -5304,8 +5487,8 @@ local function installerGun()
     ajouterOnglet("Gun", 12)
 
     local ORDRE_ONGLETS = {
-        "Protection", "Chams & Info", "Déplacement", "Joueur",
-        "Alertes", "Gun", "Performance", "Emotes",
+        "Statistiques", "Protection", "Chams & Info", "Déplacement",
+        "Joueur", "Alertes", "Gun", "Performance", "Emotes",
         "Fun", "Auto Farm", "Outils", "Paramètres",
     }
 
