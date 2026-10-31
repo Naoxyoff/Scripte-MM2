@@ -3254,9 +3254,6 @@ local function teleporterVers(cible)
         local rotation = racine.CFrame - racine.Position
         racine.CFrame = CFrame.new(position) * rotation
     end)
-    -- Correctif : après un TPA on ne sait plus si tu participes à la manche
-    -- (mort / spectateur) : l'Auto Farm reste en pause jusqu'à la prochaine manche.
-    flyControl.farmBloqueTP = generationManche
     if notifierInterface then
         notifierInterface("Téléporté au-dessus de la tête de " .. cible.DisplayName, COL.VERT, "tp_ok_" .. tostring(os.clock()))
     end
@@ -4241,8 +4238,6 @@ local function pas(dt)
 	end
 
 	local auLobby = estAuLobby()
-	-- Retour au lobby = fin du blocage TPA
-	if auLobby then flyControl.farmBloqueTP = nil end
 	-- Verrou de fin de manche : levé au retour du lobby puis départ vers la map (modes sans rôles
 	-- comme Zombie), ou par de nouveaux rôles, ou après 120 s au maximum.
 	if latchFinManche then
@@ -4315,9 +4310,8 @@ local function pas(dt)
 		derniereRecolte = t
 	end
 
-	local bloqueTP = flyControl.farmBloqueTP ~= nil and flyControl.farmBloqueTP == generationManche
 	local engage = restantes > 0 and not auLobby and distanceMin <= RAYON_ENGAGE and not sacPlein and not mort
-		and not finManche and t >= pauseStallJusqua and not bloqueTP
+		and not finManche and t >= pauseStallJusqua
 
 	if not engage then
 		if enFarm then quitterFarm() end
@@ -4327,8 +4321,6 @@ local function pas(dt)
 				finTraitee = true
 				actionFin()
 			end
-		elseif bloqueTP then
-			etatTexte = "Téléportation manuelle : farm en pause jusqu'à la prochaine manche"
 		elseif finManche then
 			etatTexte = "Manche terminée : farm en pause jusqu'à la prochaine manche"
 		elseif t < pauseStallJusqua then
