@@ -110,7 +110,7 @@ local function sauvegarderConfig(extra)
         if type(extra) == "table" then
             for k, v in pairs(extra) do donnees[k] = v end
         end
-        donnees.version = 4
+        donnees.version = 5
         local http = game:GetService("HttpService")
         local json = http:JSONEncode(donnees)
         writefile(NOM_CONFIG, json)
@@ -185,6 +185,7 @@ function DIAG.mesure(nom, f, ...)
 	return ok, resultat
 end
 local flyControl
+local stopperEmoteActuelle = nil
 
 do
 local VITESSE_HORIZONTALE_MAX = 120
@@ -459,6 +460,8 @@ local flyOldAutoRotate = nil
 
 local flySonsSilences = {}
 local flySonAjouteConnection = nil
+local flySonsPersonnage = nil
+local flySonsInitialises = false
 local function appliquerSilencePas(instance)
     if not instance or not instance:IsA("Sound") then return end
     local nom = string.lower(instance.Name)
@@ -472,12 +475,34 @@ end
 local function couperSonsPasFly()
     local personnage = joueur.Character
     if not personnage then return end
-    for _, objet in ipairs(personnage:GetDescendants()) do
-        appliquerSilencePas(objet)
+
+    -- Après un respawn, l'ancienne connexion ne doit pas empêcher le nouveau
+    -- personnage d'être surveillé pour ses sons de marche.
+    if flySonsPersonnage ~= personnage then
+        if flySonAjouteConnection then
+            pcall(function() flySonAjouteConnection:Disconnect() end)
+            flySonAjouteConnection = nil
+        end
+        for son, volume in pairs(flySonsSilences) do
+            if son and son.Parent then pcall(function() son.Volume = volume end) end
+        end
+        table.clear(flySonsSilences)
+        flySonsPersonnage = personnage
+        flySonsInitialises = false
+    end
+
+    -- Le scan initial est fait une seule fois par personnage. Ensuite,
+    -- DescendantAdded prend en charge les nouveaux sons sans rescanner tout
+    -- l'avatar à chaque frame du RenderStepped.
+    if not flySonsInitialises then
+        for _, objet in ipairs(personnage:GetDescendants()) do
+            appliquerSilencePas(objet)
+        end
+        flySonsInitialises = true
     end
     if not flySonAjouteConnection then
         flySonAjouteConnection = connecter(personnage.DescendantAdded, function(objet)
-            if flyOn then appliquerSilencePas(objet) end
+            if flyOn and joueur.Character == personnage then appliquerSilencePas(objet) end
         end)
     end
 end
@@ -487,6 +512,8 @@ local function restaurerSonsPasFly()
         if son and son.Parent then pcall(function() son.Volume = volume end) end
     end
     table.clear(flySonsSilences)
+    flySonsPersonnage = nil
+    flySonsInitialises = false
 end
 local noclipOriginal = {}
 local noclipVisualOriginal = {}
@@ -659,11 +686,17 @@ connecter(RunService.Stepped, function()
     end
 end)
 
-pcall(function() RunService:UnbindFromRenderStep("TenebresNoclipVisuel") end)
-RunService:BindToRenderStep("TenebresNoclipVisuel", Enum.RenderPriority.Camera.Value + 1, function()
+-- La transparence du Noclip n'a pas besoin d'être réappliquée à chaque image.
+-- Une vérification légère à 10 Hz suffit et évite une boucle visuelle coûteuse.
+local prochainRafraichissementNoclipVisuel = 0
+connecter(RunService.Heartbeat, function()
     if fermee or not noclipOn then return end
+    local maintenant = os.clock()
+    if maintenant < prochainRafraichissementNoclipVisuel then return end
+    prochainRafraichissementNoclipVisuel = maintenant + 0.1
     for part in pairs(noclipVisualOriginal) do
-        if part.Parent and part.Name ~= "HumanoidRootPart" then
+        if part.Parent and part.Name ~= "HumanoidRootPart"
+            and part.LocalTransparencyModifier ~= noclipTransparence then
             part.LocalTransparencyModifier = noclipTransparence
         end
     end
@@ -807,7 +840,8 @@ local NOMS_ROLES = { murder = "Murder", sherif = "Sheriff", heros = "Héros", in
 local rolesActifs = false
 local armeActive = false
 local nomsActifs = false
-local DISTANCE_MAX_PSEUDO = 250
+local DISTANCE_MAX_CHAMS = 450   -- portée max des chams joueurs, pistolet et pseudos (en studs)
+local DISTANCE_MAX_PSEUDO = 450
 
 local opaciteChams = 10
 local transparenceChams = 100 - opaciteChams
@@ -1198,6 +1232,13 @@ local function majVisuel(joueurCible)
 		return
 	end
 
+	-- Portée maximale : au-delà, ni chams ni pseudo
+	if racine and distance > DISTANCE_MAX_CHAMS then
+		retirerHalo(joueurCible)
+		retirerEtiquette(joueurCible)
+		return
+	end
+
 	local c = couleurRole(role)
 
 	local h = halos[joueurCible]
@@ -1320,6 +1361,12 @@ local function majArme()
     infoArme = partie and "Oui" or "Non"
 
     if not armeActive or not partie or not objetGun then
+        retirerArme()
+        return
+    end
+
+    -- Portée maximale du chams pistolet
+    if racine and (partie.Position - racine.Position).Magnitude > DISTANCE_MAX_CHAMS then
         retirerArme()
         return
     end
@@ -1927,18 +1974,18 @@ local function interrupteur(page, nom, description, defaut, rappel)
 end
 
 local function formaterValeurCurseur(valeur, suffixe)
-    local texteValeur = string.format("%.2f", valeur)
-    texteValeur = texteValeur:gsub("0+$", ""):gsub("%.$", "")
-    return texteValeur .. (suffixe or "")
+    -- Affiche uniquement des valeurs entières : 23, 24, 25, 26...
+    return tostring(math.floor(valeur + 0.5)) .. (suffixe or "")
 end
 
 local function bornerValeurCurseur(valeur, minimum, maximum)
-    if type(valeur) ~= "number" or valeur ~= valeur then
+    if type(valeur) ~= "number" or valeur ~= valeur or valeur == math.huge or valeur == -math.huge then
         return minimum
     end
 
+    -- Le curseur s'aligne strictement sur chaque graduation entière.
     valeur = math.floor(valeur + 0.5)
-    return math.clamp(valeur, minimum, maximum)
+    return math.clamp(valeur, math.ceil(minimum), math.floor(maximum))
 end
 
 local function optionCurseur(page, nom, description, minimum, maximum, defaut, suffixe, rappelInterrupteur, rappelValeur)
@@ -2015,10 +2062,6 @@ local function optionCurseur(page, nom, description, minimum, maximum, defaut, s
     end
     local function appliquerValeur(valeur, sauvegarder)
         valeur = bornerValeurCurseur(valeur, minimum, maximum)
-        -- Résolution au centième : le curseur n'est plus arrondi à l'entier.
-        valeur = math.floor(valeur + 0.5)
-        if valeur < minimum then valeur = minimum end
-        if valeur > maximum then valeur = maximum end
         valeurActuelle = valeur
         placer(valeur)
         valeurLabel.Text = formaterValeurCurseur(valeur, suffixe)
@@ -2278,12 +2321,17 @@ local function retirerTraceur(p)
 	traceurs[p] = nil
 end
 
-connecter(RunService.RenderStepped, function()
+local accumulateurTraceurs = 0
+connecter(RunService.RenderStepped, function(dt)
 	if fermee then return end
+    -- 30 actualisations/s suffisent pour les lignes à l'écran et limitent
+    -- le coût du calcul de projection pour chaque joueur.
+    accumulateurTraceurs = accumulateurTraceurs + dt
+    if accumulateurTraceurs < (1 / 30) then return end
+    accumulateurTraceurs = 0
 	local cam = workspace.CurrentCamera
 
 	if rolesActifs then
-		local pulse = 0.12 * math.sin(os.clock() * 4)
 		for p, h in pairs(halos) do
 			if h.Parent and rolesParJoueur[p] == "murder" then
 				h.FillTransparency = transparenceChams / 100
@@ -2332,11 +2380,24 @@ end)
 
 end
 
-do
 local derniereAlerte = {}
-local notificationsActives = 0
-local function notifier(message, couleur, cle)
+local DELAI_ANTI_SPAM = 2.5
 
+-- Les notifications sont enregistrées uniquement dans l'historique
+-- du Centre de notifications de TÉNÈBRES : aucun toast à l'écran.
+local function notifier(message, couleur, cle)
+    if fermee then return end
+    message = tostring(message or "Notification")
+    cle = tostring(cle or message)
+
+    local maintenant = os.clock()
+    local precedent = derniereAlerte[cle]
+    if precedent and maintenant - precedent < DELAI_ANTI_SPAM then return end
+    derniereAlerte[cle] = maintenant
+
+    if DIAG and DIAG.consigner then
+        pcall(DIAG.consigner, message)
+    end
 end
 notifierInterface = notifier
 
@@ -2365,8 +2426,6 @@ task.spawn(function()
 		task.wait(0.3)
 	end
 end)
-
-end
 
 local activerBooster
 do
@@ -3520,8 +3579,6 @@ local function curseurVert(nom, note, minimum, maximum, defaut, rappel)
     end
     local function appliquerValeur(valeur, sauvegarder)
         valeur = bornerValeurCurseur(valeur, minimum, maximum)
-        valeur = math.floor(valeur + 0.5)
-        valeur = math.clamp(valeur, minimum, maximum)
         valeurActuelle = valeur
         placer(valeur)
         valeurLabel.Text = formaterValeurCurseur(valeur, "")
@@ -4646,7 +4703,7 @@ majHistoriqueNotifications = function()
     end
     texteHistorique.Text = #lignes > 0 and table.concat(lignes, "\n") or "Aucune notification récente."
 end
-carteBouton(pages["Outils"], "Tester une notification", "Vérifie l'affichage et ajoute une entrée à l'historique", "Tester", COL.VIOLET, function()
+carteBouton(pages["Outils"], "Tester une notification", "Ajoute un message dans le centre de notifications, sans pop-up à l'écran", "Tester", COL.VIOLET, function()
     if notifierInterface then notifierInterface("Notification de test TÉNÈBRES", COL.ORCHIDEE, "test_" .. tostring(os.clock())) end
 end)
 carteBouton(pages["Outils"], "Effacer l'historique", "Supprime les entrées du centre de notifications", "Effacer", COL.GRIS, function()
@@ -4655,69 +4712,554 @@ carteBouton(pages["Outils"], "Effacer l'historique", "Supprime les entrées du c
 end)
 
 ;(function()
-section(pages["Emotes"], "Danses Roblox")
-local emoteTrackActuelle = nil
-local emoteAnimationActuelle = nil
-local IDS_EMOTES = {
-    dance = "507771019",
-    dance2 = "507776043",
-    dance3 = "507777268",
+local pageEmotes = pages["Emotes"]
+
+-- Liste des emotes. "alt" = IDs de remplacement essayés automatiquement si l'ID principal échoue.
+local EMOTES = {
+    { cat = "danses", nom = "Dance", id = "507771019", idR6 = "182435998", alt = {}, mots = "danse" },
+    { cat = "danses", nom = "Dance 2", id = "507776043", idR6 = "182436842", alt = {}, mots = "danse" },
+    { cat = "danses", nom = "Dance 3", id = "507777268", idR6 = "182436935", alt = {}, mots = "danse" },
+    { cat = "danses", nom = "Hype Dance", id = "3695333486", alt = {}, mots = "danse" },
+    { cat = "danses", nom = "Dorky Dance", id = "4212455378", alt = { "4212499637" }, mots = "danse" },
+    { cat = "danses", nom = "Floss", id = "5917570207", alt = {}, mots = "danse" },
+    { cat = "danses", nom = "Robot", id = "3338025566", alt = {}, mots = "danse" },
+    { cat = "danses", nom = "Jumping Wave", id = "4940561610", alt = { "4940602656" }, mots = "danse" },
+    { cat = "danses", nom = "Bunny Hop", id = "4641985101", alt = {}, mots = "danse" },
+    { cat = "danses", nom = "Line Dance", id = "4049037604", alt = { "4049646104" }, mots = "danse" },
+    { cat = "danses", nom = "Dolphin Dance", id = "5918726674", alt = { "5938365243" }, mots = "danse" },
+    { cat = "danses", nom = "Break Dance", id = "5915648917", alt = { "5915773992" }, mots = "danse" },
+    { cat = "danses", nom = "Fast Hands", id = "4265701731", alt = { "4272351660" }, mots = "danse" },
+    { cat = "danses", nom = "Godlike", id = "3337994105", alt = { "3823158750" }, mots = "danse" },
+    { cat = "danses", nom = "Air Guitar", id = "3695300085", alt = {}, mots = "danse" },
+    { cat = "danses", nom = "Monkey", id = "3333499508", alt = { "3716636630" }, mots = "danse" },
+    { cat = "danses", nom = "Fashionable", id = "3333331310", alt = { "3576745472" }, mots = "danse" },
+    { cat = "gestes", nom = "Wave", id = "507770239", idR6 = "128777973", alt = {}, mots = "salut" },
+    { cat = "gestes", nom = "Hello", id = "3576686446", alt = {}, mots = "salut bonjour" },
+    { cat = "gestes", nom = "Point", id = "507770453", idR6 = "128853357", alt = {}, mots = "pointer" },
+    { cat = "gestes", nom = "Point 2", id = "3576823880", alt = {}, mots = "pointer" },
+    { cat = "gestes", nom = "Cheer", id = "507770677", idR6 = "129423030", alt = {}, mots = "joie" },
+    { cat = "gestes", nom = "Laugh", id = "507770818", idR6 = "129423131", alt = {}, mots = "rire" },
+    { cat = "gestes", nom = "Haha", id = "3337966527", alt = {}, mots = "rire" },
+    { cat = "gestes", nom = "Celebrate", id = "3338097973", alt = {}, mots = "fete joie" },
+    { cat = "gestes", nom = "Applaud", id = "5915779043", alt = {}, mots = "applaudir" },
+    { cat = "gestes", nom = "Shrug", id = "3576968026", alt = {}, mots = "haussement epaules" },
+    { cat = "gestes", nom = "Salute", id = "3360689775", alt = {}, mots = "salut militaire" },
+    { cat = "gestes", nom = "Stadium", id = "3360686498", alt = {} },
+    { cat = "gestes", nom = "Tilt", id = "3360692915", alt = {} },
+    { cat = "gestes", nom = "Curtsy", id = "4555816777", alt = { "4646306583" }, mots = "reverence" },
+    { cat = "gestes", nom = "Happy", id = "4841405708", alt = { "4849499887" }, mots = "content joie" },
+    { cat = "gestes", nom = "Sad", id = "4841407203", alt = { "4849502101" }, mots = "triste" },
+    { cat = "gestes", nom = "Bored", id = "5230599789", alt = { "5230661597" }, mots = "ennui" },
+    { cat = "gestes", nom = "Sleep", id = "4686925579", alt = { "4689362868" }, mots = "dormir" },
+    { cat = "gestes", nom = "Louder", id = "3338042785", alt = {} },
+    { cat = "gestes", nom = "Hero Landing", id = "5104344710", alt = { "5104377791" }, mots = "atterrissage" },
+    { cat = "payantes", nom = "Facepalm", id = "98397659371921", prix = "55 Robux", alt = {}, mots = "tete main visage" },
+    { cat = "payantes", nom = "Holding my Head", id = "112562880950292", prix = "55 Robux", alt = {}, mots = "tete headless tenir main" },
+    { cat = "payantes", nom = "Holding Head Headless", id = "113326574345610", prix = "55 Robux", alt = {}, mots = "tete headless tenir main" },
+    { cat = "payantes", nom = "Fake MM2 Death", id = "107498554725527", prix = "55 Robux", alt = {}, mots = "mm2 mort faux" },
+    { cat = "payantes", nom = "MM2 Fake Dead", id = "132384701706046", prix = "55 Robux", alt = {}, mots = "mm2 mort faux" },
+    { cat = "payantes", nom = "Helicopter", id = "110553756436163", prix = "55 Robux", alt = {}, mots = "helicoptere" },
+    { cat = "payantes", nom = "Rat Dance", id = "83606297144428", prix = "55 Robux", alt = {}, mots = "rat danse" },
+    { cat = "payantes", nom = "Plane", id = "134913783169182", prix = "55 Robux", alt = {}, mots = "avion" },
+    { cat = "payantes", nom = "Tank", id = "85076031433488", prix = "55 Robux", alt = {}, mots = "char" },
+    { cat = "payantes", nom = "Car", id = "115407270129592", prix = "55 Robux", alt = {}, mots = "voiture" },
+    { cat = "payantes", nom = "Shy", id = "3576717965", prix = "55 Robux", alt = {}, mots = "timide" },
+    { cat = "payantes", nom = "Quiet Waves", id = "7466046574", prix = "110 Robux", alt = {} },
+    { cat = "payantes", nom = "Baby Dance", id = "4272484885", prix = "100 Robux", alt = {}, mots = "bebe danse" },
+    { cat = "payantes", nom = "Box", id = "73500261613116", prix = "55 Robux", alt = {}, mots = "boite" },
+    { cat = "payantes", nom = "Hide", id = "84868707350198", prix = "55 Robux", alt = {}, mots = "cacher" },
+    { cat = "payantes", nom = "Dog", id = "84198855496510", prix = "55 Robux", alt = {}, mots = "chien" },
+    { cat = "payantes", nom = "Ragdoll Push", id = "91452077708399", prix = "55 Robux", alt = {} },
+    { cat = "payantes", nom = "Take The L", id = "75633408126191", prix = "55 Robux", alt = {} },
+    { cat = "payantes", nom = "Fry Dance", id = "124799741487022", prix = "55 Robux", alt = {}, mots = "danse" },
+    { cat = "payantes", nom = "Twirl", id = "3716633898", prix = "250 Robux", alt = {}, mots = "tourner" },
+    { cat = "payantes", nom = "Cower", id = "4940597758", prix = "55 Robux", alt = {}, mots = "peur" },
+    { cat = "payantes", nom = "High Wave", id = "5915776835", prix = "55 Robux", alt = {}, mots = "salut" },
+    { cat = "payantes", nom = "Worm", id = "108956933782219", prix = "55 Robux", alt = {}, mots = "ver" },
+    { cat = "payantes", nom = "Phase", id = "79653736088166", prix = "55 Robux", alt = {} },
+    { cat = "payantes", nom = "Side to Side", id = "3762641826", prix = "100 Robux", alt = {}, mots = "danse" },
+    { cat = "payantes", nom = "Chill Bounce", id = "132112297758791", prix = "55 Robux", alt = {}, mots = "danse" },
+    { cat = "payantes", nom = "Shuffle", id = "4391208058", prix = "200 Robux", alt = {}, mots = "danse" },
+    { cat = "payantes", nom = "Dizzy", id = "3934986896", prix = "175 Robux", alt = {}, mots = "etourdi" },
+    { cat = "payantes", nom = "Bodybuilder", id = "3994130516", prix = "200 Robux", alt = {}, mots = "muscle" },
+    { cat = "payantes", nom = "Samba", id = "6869813008", prix = "100 Robux", alt = {}, mots = "danse" },
+    { cat = "payantes", nom = "Zombie", id = "4212496830", prix = "100 Robux", alt = {} },
+    { cat = "payantes", nom = "Greatest", id = "3762654854", prix = "55 Robux", alt = {} },
+    { cat = "payantes", nom = "Confused", id = "4940592718", prix = "55 Robux", alt = {}, mots = "confus" },
+    { cat = "payantes", nom = "Power Blast", id = "4849497510", prix = "120 Robux", alt = {} },
+    { cat = "payantes", nom = "Gangnam Style", id = "104142334418357", prix = "55 Robux", alt = {}, mots = "danse" },
+    { cat = "payantes", nom = "Festive Dance", id = "15679955281", prix = "55 Robux", alt = {}, mots = "danse fete" },
+    { cat = "payantes", nom = "Cute Sit", id = "82167506755506", prix = "55 Robux", alt = {}, mots = "assis" },
+    { cat = "payantes", nom = "Floating Aura", id = "79795305221612", prix = "55 Robux", alt = {}, mots = "flotter" },
+    { cat = "payantes", nom = "Basketball Head", id = "107282826166809", prix = "55 Robux", alt = {}, mots = "tete" },
+    { cat = "payantes", nom = "Spiderman Hang", id = "108635834286627", prix = "55 Robux", alt = {}, mots = "araignee" },
+    { cat = "payantes", nom = "SHAKE", id = "132367660388476", prix = "55 Robux", alt = {}, mots = "danse" },
+    { cat = "payantes", nom = "Popular", id = "71302743123422", prix = "55 Robux", alt = {} },
+    { cat = "payantes", nom = "Top Rock", id = "3570535774", prix = "750 Robux", alt = {}, mots = "danse" },
+    { cat = "payantes", nom = "Fancy Feet", id = "3934988903", prix = "500 Robux", alt = {}, mots = "danse" },
+    { cat = "payantes", nom = "Around Town", id = "3576747102", prix = "1000 Robux", alt = {} },
 }
 
-local function arreterEmoteActuelle()
-    if emoteTrackActuelle then
-        pcall(function() emoteTrackActuelle:Stop(0.15) end)
-        pcall(function() emoteTrackActuelle:Destroy() end)
-        emoteTrackActuelle = nil
+local piste, animationCourante, emoteCourante = nil, nil, nil
+local jetonEmote = 0
+local statuts = {}
+local entreesEmotes = {}
+local sectionsEmotes = {}
+local filtreEmotes = ""
+local labelEtatEmote = nil
+local labelAucun = nil
+local rafraichirEmotes
+local appliquerFiltreEmotes
+
+-- Favoris : sauvegardés automatiquement dans un fichier séparé (indépendant du bouton « Sauver »).
+local FICHIER_FAVORIS = "tenebres_mm2_favoris.json"
+local favoris = {}
+pcall(function()
+    if isfile and readfile and isfile(FICHIER_FAVORIS) then
+        local donnees = game:GetService("HttpService"):JSONDecode(readfile(FICHIER_FAVORIS))
+        if type(donnees) == "table" then
+            for _, nom in ipairs(donnees) do
+                if type(nom) == "string" then favoris[nom] = true end
+            end
+        end
     end
-    if emoteAnimationActuelle then
-        pcall(function() emoteAnimationActuelle:Destroy() end)
-        emoteAnimationActuelle = nil
+end)
+local erreurFavorisSignalee = false
+local function sauvegarderFavoris()
+    local ok = pcall(function()
+        if type(writefile) ~= "function" then error("writefile indisponible") end
+        local liste = {}
+        for nom in pairs(favoris) do liste[#liste + 1] = nom end
+        table.sort(liste)
+        writefile(FICHIER_FAVORIS, game:GetService("HttpService"):JSONEncode(liste))
+    end)
+    if not ok and not erreurFavorisSignalee then
+        erreurFavorisSignalee = true
+        if notifierInterface then
+            pcall(notifierInterface, "Favoris non sauvegardés : écriture de fichiers indisponible sur cet exécuteur", COL.ORANGE, "favoris_erreur")
+        end
     end
 end
 
-local function jouerDanseRoblox(nomDanse, libelle)
-    local personnage = joueur.Character
-    local humanoideDanse = personnage and personnage:FindFirstChildOfClass("Humanoid")
-    if not humanoideDanse or humanoideDanse.Health <= 0 then
-        if notifierInterface then notifierInterface("Attends que ton personnage soit chargé, puis réessaie.", COL.ROUGE, "danse_avatar_absent") end
-        return
+local function noterEmote(message, couleur, cle)
+    if notifierInterface then
+        pcall(notifierInterface, message, couleur or COL.ORCHIDEE, cle or ("emote_" .. tostring(os.clock())))
     end
-    arreterEmoteActuelle()
-    local animator = humanoideDanse:FindFirstChildOfClass("Animator")
+end
+
+local function detruire(objet)
+    if objet then pcall(function() objet:Destroy() end) end
+end
+
+local function arreterEmoteActuelle()
+    jetonEmote = jetonEmote + 1
+    local ancienne = emoteCourante
+    if ancienne and statuts[ancienne] and statuts[ancienne].texte == "Chargement..." then
+        statuts[ancienne] = { texte = "Interrompue", couleur = COL.MUET }
+    end
+    local t, a = piste, animationCourante
+    piste, animationCourante, emoteCourante = nil, nil, nil
+    if t then
+        pcall(function() t:Stop(0.15) end)
+        task.delay(0.25, function() detruire(t) end)
+    end
+    detruire(a)
+    if rafraichirEmotes then pcall(rafraichirEmotes) end
+end
+stopperEmoteActuelle = arreterEmoteActuelle
+
+local function definirStatut(emote, texteStatut, couleur)
+    statuts[emote] = { texte = texteStatut, couleur = couleur }
+    if rafraichirEmotes then pcall(rafraichirEmotes) end
+end
+
+local function obtenirHumanoide()
+    local perso = joueur.Character
+    local hum = perso and perso:FindFirstChildOfClass("Humanoid")
+    if hum and hum.Parent and hum.Health > 0 then return hum end
+    return nil
+end
+
+local ServiceContenu = game:GetService("ContentProvider")
+
+-- Charge l'animation dans un fil séparé avec un délai maximum : LoadAnimation peut rester
+-- bloqué indéfiniment sur un asset inaccessible.
+local function chargerAvecDelai(animator, anim, delai)
+    local fini, ok, res = false, false, nil
+    task.spawn(function()
+        local o, r = pcall(function() return animator:LoadAnimation(anim) end)
+        ok, res, fini = o, r, true
+    end)
+    local t0 = os.clock()
+    while not fini and os.clock() - t0 < delai do task.wait(0.05) end
+    if not fini then return false, "délai dépassé au chargement" end
+    return ok, res
+end
+
+-- Demande à Roblox si l'asset est réellement accessible (Success / Failure).
+local function statutAsset(anim, delai)
+    local statut, fini = nil, false
+    task.spawn(function()
+        pcall(function()
+            ServiceContenu:PreloadAsync({ anim }, function(_, st) statut = st end)
+        end)
+        fini = true
+    end)
+    local t0 = os.clock()
+    while not fini and os.clock() - t0 < delai do task.wait(0.05) end
+    return statut, fini
+end
+
+-- Les IDs du catalogue (emotes de type EmoteAnimation) ne sont pas des IDs d'animation :
+-- on récupère l'objet Animation réel via GetObjects pour obtenir le bon AnimationId.
+local function resoudreCatalogue(id, delai)
+    local fini, resultat = false, nil
+    task.spawn(function()
+        local ok, objets = pcall(function() return game:GetObjects("rbxassetid://" .. id) end)
+        if ok and type(objets) == "table" then
+            for _, o in ipairs(objets) do
+                local a = nil
+                pcall(function()
+                    a = o:IsA("Animation") and o or o:FindFirstChildWhichIsA("Animation", true)
+                end)
+                if a and a.AnimationId ~= "" then
+                    resultat = a.AnimationId
+                    break
+                end
+            end
+        end
+        fini = true
+    end)
+    local t0 = os.clock()
+    while not fini and os.clock() - t0 < delai do task.wait(0.05) end
+    return resultat
+end
+
+local function corpsEmote(emote, hum, monJeton)
+    local estR6 = hum.RigType == Enum.HumanoidRigType.R6
+    local animator = hum:FindFirstChildOfClass("Animator") or hum:WaitForChild("Animator", 3)
     if not animator then
         animator = Instance.new("Animator")
-        animator.Parent = humanoideDanse
+        animator.Parent = hum
     end
-    local animation = Instance.new("Animation")
-    animation.Name = "Tenebres_" .. nomDanse
-    animation.AnimationId = "rbxassetid://" .. IDS_EMOTES[nomDanse]
-    local ok, track = pcall(function() return animator:LoadAnimation(animation) end)
-    if not ok or not track then
-        animation:Destroy()
-        if notifierInterface then notifierInterface("Roblox n’a pas autorisé cette danse sur cet avatar.", COL.ROUGE, "danse_refusee_" .. nomDanse) end
-        return
+    if monJeton ~= jetonEmote then return end
+
+    local ids = { (estR6 and emote.idR6) or emote.id }
+    for _, alt in ipairs(emote.alt or {}) do ids[#ids + 1] = alt end
+    local raison = "inconnue"
+
+    for _, id in ipairs(ids) do
+        if monJeton ~= jetonEmote then return end
+        local anim = Instance.new("Animation")
+        anim.Name = "Tenebres_" .. emote.nom
+        anim.AnimationId = "rbxassetid://" .. id
+
+        local st, termine = statutAsset(anim, 6)
+        if monJeton ~= jetonEmote then detruire(anim) return end
+        if st == Enum.AssetFetchStatus.Failure or st == Enum.AssetFetchStatus.TimedOut then
+            local reel = resoudreCatalogue(id, 8)
+            if monJeton ~= jetonEmote then detruire(anim) return end
+            if reel then
+                anim.AnimationId = reel
+                st, termine = statutAsset(anim, 6)
+                if monJeton ~= jetonEmote then detruire(anim) return end
+            end
+        end
+        if st == Enum.AssetFetchStatus.Failure or st == Enum.AssetFetchStatus.TimedOut then
+            raison = "asset inaccessible (inexistant ou non autorisé) : " .. tostring(st)
+            detruire(anim)
+        elseif not termine then
+            raison = "Roblox ne répond pas pour cet asset (délai dépassé)"
+            detruire(anim)
+        else
+            local ok, track = chargerAvecDelai(animator, anim, 6)
+            if monJeton ~= jetonEmote then detruire(anim) return end
+            if not ok or not track then
+                raison = "chargement refusé : " .. string.sub(tostring(track), 1, 70)
+                detruire(anim)
+            else
+                local t0 = os.clock()
+                while monJeton == jetonEmote and track.Length <= 0 and os.clock() - t0 < 4 do
+                    task.wait(0.05)
+                end
+                if monJeton ~= jetonEmote then
+                    detruire(track)
+                    detruire(anim)
+                    return
+                end
+                if track.Length <= 0 then
+                    raison = "animation vide ou non autorisée"
+                    detruire(track)
+                    detruire(anim)
+                else
+                    track.Priority = Enum.AnimationPriority.Action
+                    track.Looped = true
+                    local lectureOK = pcall(function() track:Play(0.2, 1, 1) end)
+                    if lectureOK then
+                        task.wait(0.2)
+                        if monJeton ~= jetonEmote then
+                            pcall(function() track:Stop(0) end)
+                            detruire(track)
+                            detruire(anim)
+                            return
+                        end
+                        if track.IsPlaying then
+                            piste, animationCourante = track, anim
+                            local txt = "Vérifiée à l'exécution (" .. (estR6 and "R6" or "R15") .. ")"
+                            local douteux = estR6 and not emote.idR6
+                            if douteux then txt = txt .. " · R6 : rendu non garanti" end
+                            definirStatut(emote, txt, douteux and COL.ORANGE or COL.VERT)
+                            noterEmote("Danse lancée : " .. emote.nom, COL.ORCHIDEE)
+                            return
+                        end
+                        raison = "lecture impossible"
+                    else
+                        raison = "lecture refusée"
+                    end
+                    pcall(function() track:Stop(0) end)
+                    detruire(track)
+                    detruire(anim)
+                end
+            end
+        end
     end
-    track.Priority = Enum.AnimationPriority.Action
-    track.Looped = true
-    local lectureOK = pcall(function() track:Play(0.2, 1, 1) end)
-    if not lectureOK then
-        pcall(function() track:Destroy() end)
-        animation:Destroy()
-        if notifierInterface then notifierInterface("Impossible de démarrer la danse.", COL.ROUGE, "danse_echec_" .. nomDanse) end
-        return
+
+    if monJeton == jetonEmote then
+        emoteCourante = nil
+        definirStatut(emote, "Échec : " .. raison, COL.ROUGE)
+        noterEmote(emote.nom .. " : " .. raison, COL.ROUGE)
     end
-    emoteTrackActuelle, emoteAnimationActuelle = track, animation
-    if notifierInterface then notifierInterface("Danse lancée : " .. libelle, COL.ORCHIDEE, "danse_lancee_" .. nomDanse) end
 end
 
-connecter(joueur.CharacterAdded, function()
+local function jouerEmote(emote)
+    if fermee then return end
+    if flingActif then
+        noterEmote("Fling en cours : emote bloquée", COL.ORANGE)
+        return
+    end
+    if flyControl.farmActif then
+        noterEmote("Auto Farm en cours : emote bloquée", COL.ORANGE)
+        return
+    end
+    local hum = obtenirHumanoide()
+    if not hum then
+        definirStatut(emote, "Personnage indisponible", COL.ROUGE)
+        noterEmote("Attends que ton personnage soit chargé, puis réessaie.", COL.ROUGE)
+        return
+    end
+
     arreterEmoteActuelle()
+    local monJeton = jetonEmote
+    emoteCourante = emote
+    definirStatut(emote, "Chargement...", COL.ORANGE)
+
+    task.spawn(function()
+        local ok, erreur = xpcall(corpsEmote, function(e) return tostring(e) end, emote, hum, monJeton)
+        if not ok and monJeton == jetonEmote then
+            emoteCourante = nil
+            definirStatut(emote, "Erreur : " .. string.sub(tostring(erreur), 1, 90), COL.ROUGE)
+            noterEmote(emote.nom .. " : erreur " .. tostring(erreur), COL.ROUGE)
+        end
+    end)
+end
+
+-- Contrôles
+section(pageEmotes, "Contrôle")
+local carteEtatEmote = carte(pageEmotes, 56)
+labelEtatEmote = texte(carteEtatEmote, {
+    Size = UDim2.new(1, -140, 0, 18), Position = UDim2.fromOffset(22, 10),
+    Text = "Aucune danse en cours", Font = Enum.Font.GothamBold, TextSize = 12,
+})
+texte(carteEtatEmote, {
+    Size = UDim2.new(1, -140, 0, 16), Position = UDim2.fromOffset(22, 30),
+    Text = "Aucune danse ne démarre sans ton clic", TextColor3 = COL.MUET, TextSize = 10,
+    TextTruncate = Enum.TextTruncate.AtEnd,
+})
+local boutonStop = creer("TextButton", {
+    Size = UDim2.fromOffset(100, 28), Position = UDim2.new(1, -116, 0.5, -14),
+    BackgroundColor3 = COL.ROUGE, Text = "STOP", TextColor3 = COL.BLANC,
+    Font = Enum.Font.GothamBold, TextSize = 12, AutoButtonColor = false,
+}, carteEtatEmote)
+coins(boutonStop, 8)
+connecter(boutonStop.MouseEnter, function() tw(boutonStop, { BackgroundTransparency = 0.2 }, 0.12) end)
+connecter(boutonStop.MouseLeave, function() tw(boutonStop, { BackgroundTransparency = 0 }, 0.12) end)
+connecter(boutonStop.Activated, function()
+    arreterEmoteActuelle()
+    noterEmote("Danse arrêtée", COL.GRIS)
 end)
-carteBouton(pages["Emotes"], "Danse 1", "Animation de danse Roblox classique", "Danser 1", COL.VIOLET, function() jouerDanseRoblox("dance", "Danse 1") end)
-carteBouton(pages["Emotes"], "Danse 2", "Deuxième animation de danse Roblox classique", "Danser 2", COL.VIOLET, function() jouerDanseRoblox("dance2", "Danse 2") end)
-carteBouton(pages["Emotes"], "Danse 3", "Troisième animation de danse Roblox classique", "Danser 3", COL.VIOLET, function() jouerDanseRoblox("dance3", "Danse 3") end)
-carteBouton(pages["Emotes"], "Arrêter la danse", "Arrête la danse en cours", "Arrêter", COL.GRIS, function() arreterEmoteActuelle() end)
+
+local carteRecherche = carte(pageEmotes, 52)
+local champRecherche = creer("TextBox", {
+    Size = UDim2.new(1, -44, 0, 30), Position = UDim2.fromOffset(22, 11),
+    BackgroundColor3 = COL.CARTE_CLAIRE, Text = "", PlaceholderText = "Rechercher une danse...",
+    PlaceholderColor3 = COL.MUET, TextColor3 = COL.TEXTE, Font = Enum.Font.Gotham, TextSize = 12,
+    TextXAlignment = Enum.TextXAlignment.Left, ClearTextOnFocus = false, MultiLine = false,
+}, carteRecherche)
+coins(champRecherche, 8)
+creer("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }, champRecherche)
+
+local function creerEntreeEmote(emote, favoriVue)
+    local c = carte(pageEmotes, 56)
+    texte(c, {
+        Size = UDim2.new(1, -196, 0, 18), Position = UDim2.fromOffset(22, 10),
+        Text = emote.nom, Font = Enum.Font.GothamBold, TextSize = 12, TextTruncate = Enum.TextTruncate.AtEnd,
+    })
+    local sub = texte(c, {
+        Size = UDim2.new(1, -196, 0, 16), Position = UDim2.fromOffset(22, 30),
+        Text = emote.prix and ("Non testée · payante : " .. emote.prix) or "Non testée", TextColor3 = COL.MUET, TextSize = 10, TextTruncate = Enum.TextTruncate.AtEnd,
+    })
+    local b = creer("TextButton", {
+        Size = UDim2.fromOffset(100, 28), Position = UDim2.new(1, -116, 0.5, -14),
+        BackgroundColor3 = COL.VIOLET, Text = "Jouer", TextColor3 = COL.BLANC,
+        Font = Enum.Font.GothamBold, TextSize = 12, AutoButtonColor = false,
+    }, c)
+    coins(b, 8)
+    connecter(b.MouseEnter, function() tw(b, { BackgroundTransparency = 0.2 }, 0.12) end)
+    connecter(b.MouseLeave, function() tw(b, { BackgroundTransparency = 0 }, 0.12) end)
+    connecter(b.Activated, function() jouerEmote(emote) end)
+    local etoile = creer("TextButton", {
+        Size = UDim2.fromOffset(32, 28), Position = UDim2.new(1, -156, 0.5, -14),
+        BackgroundColor3 = COL.CARTE_CLAIRE, Text = "☆", TextColor3 = COL.MUET,
+        Font = Enum.Font.GothamBold, TextSize = 16, AutoButtonColor = false,
+    }, c)
+    coins(etoile, 8)
+    connecter(etoile.Activated, function()
+        if favoris[emote.nom] then favoris[emote.nom] = nil else favoris[emote.nom] = true end
+        sauvegarderFavoris()
+        if rafraichirEmotes then pcall(rafraichirEmotes) end
+        if appliquerFiltreEmotes then pcall(appliquerFiltreEmotes) end
+    end)
+    entreesEmotes[#entreesEmotes + 1] = { emote = emote, carte = c, sub = sub, bouton = b, etoile = etoile, favoriVue = favoriVue == true }
+end
+
+section(pageEmotes, "ID personnalisé")
+local emotePerso = { cat = "perso", nom = "ID personnalisé", id = "", alt = {} }
+local cartePerso = carte(pageEmotes, 76)
+local champId = creer("TextBox", {
+    Size = UDim2.new(1, -150, 0, 28), Position = UDim2.fromOffset(22, 10),
+    BackgroundColor3 = COL.CARTE_CLAIRE, Text = "", PlaceholderText = "Colle un ID d'animation (chiffres)",
+    PlaceholderColor3 = COL.MUET, TextColor3 = COL.TEXTE, Font = Enum.Font.Gotham, TextSize = 12,
+    TextXAlignment = Enum.TextXAlignment.Left, ClearTextOnFocus = false, MultiLine = false,
+}, cartePerso)
+coins(champId, 8)
+creer("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }, champId)
+local subPerso = texte(cartePerso, {
+    Size = UDim2.new(1, -44, 0, 16), Position = UDim2.fromOffset(22, 48),
+    Text = "Non testée", TextColor3 = COL.MUET, TextSize = 10, TextTruncate = Enum.TextTruncate.AtEnd,
+})
+local boutonPerso = creer("TextButton", {
+    Size = UDim2.fromOffset(100, 28), Position = UDim2.new(1, -116, 0, 10),
+    BackgroundColor3 = COL.VIOLET, Text = "Jouer", TextColor3 = COL.BLANC,
+    Font = Enum.Font.GothamBold, TextSize = 12, AutoButtonColor = false,
+}, cartePerso)
+coins(boutonPerso, 8)
+connecter(boutonPerso.MouseEnter, function() tw(boutonPerso, { BackgroundTransparency = 0.2 }, 0.12) end)
+connecter(boutonPerso.MouseLeave, function() tw(boutonPerso, { BackgroundTransparency = 0 }, 0.12) end)
+connecter(boutonPerso.Activated, function()
+    local id = string.gsub(champId.Text or "", "%D", "")
+    if id == "" then
+        noterEmote("Entre d'abord un ID d'animation (chiffres)", COL.ORANGE)
+        return
+    end
+    emotePerso.id = id
+    emotePerso.idR6 = nil
+    emotePerso.nom = "ID " .. id
+    jouerEmote(emotePerso)
+end)
+
+sectionsEmotes.favoris = section(pageEmotes, "★ Favoris")
+for _, emote in ipairs(EMOTES) do creerEntreeEmote(emote, true) end
+
+local CATEGORIES = {
+    { "danses", "Danses" },
+    { "gestes", "Gestes et réactions" },
+    { "payantes", "Emotes payantes (catalogue)" },
+}
+for _, categorie in ipairs(CATEGORIES) do
+    sectionsEmotes[categorie[1]] = section(pageEmotes, categorie[2])
+    for _, emote in ipairs(EMOTES) do
+        if emote.cat == categorie[1] then creerEntreeEmote(emote) end
+    end
+end
+labelAucun = texte(pageEmotes, {
+    Size = UDim2.new(1, 0, 0, 22), Text = "Aucune danse trouvée", TextColor3 = COL.MUET,
+    TextSize = 12, Visible = false,
+})
+labelAucun.LayoutOrder = ordre(pageEmotes)
+
+appliquerFiltreEmotes = function()
+    local f = string.lower((filtreEmotes:gsub("^%s+", ""):gsub("%s+$", "")))
+    local compte = {}
+    local total = 0
+    for _, e in ipairs(entreesEmotes) do
+        local visible = f == ""
+            or string.find(string.lower(e.emote.nom), f, 1, true) ~= nil
+            or (e.emote.mots ~= nil and string.find(e.emote.mots, f, 1, true) ~= nil)
+        if e.favoriVue then visible = visible and favoris[e.emote.nom] == true end
+        e.carte.Visible = visible
+        if visible then
+            local cle = e.favoriVue and "favoris" or e.emote.cat
+            compte[cle] = (compte[cle] or 0) + 1
+            if not e.favoriVue then total = total + 1 end
+        end
+    end
+    for cle, etiquette in pairs(sectionsEmotes) do
+        etiquette.Visible = (compte[cle] or 0) > 0
+    end
+    labelAucun.Visible = total == 0
+end
+
+connecter(champRecherche:GetPropertyChangedSignal("Text"), function()
+    filtreEmotes = champRecherche.Text or ""
+    appliquerFiltreEmotes()
+end)
+
+rafraichirEmotes = function()
+    for _, e in ipairs(entreesEmotes) do
+        local s = statuts[e.emote]
+        if s then
+            e.sub.Text = s.texte
+            e.sub.TextColor3 = s.couleur
+        end
+        local estFavori = favoris[e.emote.nom] == true
+        e.etoile.Text = estFavori and "★" or "☆"
+        e.etoile.TextColor3 = estFavori and Color3.fromRGB(255, 205, 60) or COL.MUET
+        local actif = (emoteCourante == e.emote) and piste ~= nil
+        e.bouton.Text = actif and "Actif" or "Jouer"
+        e.bouton.BackgroundColor3 = actif and COL.VERT or COL.VIOLET
+    end
+    local sp = statuts[emotePerso]
+    if sp then
+        subPerso.Text = sp.texte
+        subPerso.TextColor3 = sp.couleur
+    end
+    local actifPerso = (emoteCourante == emotePerso) and piste ~= nil
+    boutonPerso.Text = actifPerso and "Actif" or "Jouer"
+    boutonPerso.BackgroundColor3 = actifPerso and COL.VERT or COL.VIOLET
+    if labelEtatEmote then
+        labelEtatEmote.Text = emoteCourante and ("En cours : " .. emoteCourante.nom) or "Aucune danse en cours"
+    end
+end
+appliquerFiltreEmotes()
+pcall(rafraichirEmotes)
+
+-- Sécurité : coupe l'emote si le personnage change/meurt, si elle est arrêtée de l'extérieur,
+-- ou si le Fling / l'Auto Farm démarre (évite les conflits).
+connecter(joueur.CharacterAdded, function() arreterEmoteActuelle() end)
+task.spawn(function()
+    while not fermee do
+        if emoteCourante then
+            local hum = obtenirHumanoide()
+            if piste and (not hum or not piste.IsPlaying) then
+                arreterEmoteActuelle()
+            elseif flingActif or flyControl.farmActif then
+                arreterEmoteActuelle()
+                noterEmote("Danse arrêtée (fling / auto farm actif)", COL.ORANGE)
+            end
+        end
+        task.wait(0.3)
+    end
+end)
 end)()
 
 end
@@ -5006,7 +5548,6 @@ local function fermerScript()
     pcall(function() flyControl.farmActif = false end)
     pcall(function() if flyControl.activerFly then flyControl.activerFly(false) end end)
     pcall(function() if flyControl.activerNoclip then flyControl.activerNoclip(false) end end)
-    pcall(function() RunService:UnbindFromRenderStep("TenebresNoclipVisuel") end)
     pcall(function() if definirActif then definirActif(false) end end)
 
     pcall(function() antiAfkOn = false end)
@@ -5034,6 +5575,7 @@ local function fermerScript()
     end)
     pcall(function() if arcHalo then arcHalo:Destroy() arcHalo = nil end end)
     pcall(function() if retirerTrainee then retirerTrainee() end end)
+    pcall(function() if stopperEmoteActuelle then stopperEmoteActuelle() end end)
 
     pcall(function()
         tracersActifs, alerteArmeOn, alerteMurderOn = false, false, false
