@@ -88,6 +88,8 @@ local statsMM2 = {
     piecesTotal = 0, manches = 0, survieSecondes = 0, survies = 0,
     victoires = { murder = 0, sherif = 0, innocent = 0 },
     sessionPieces = 0,
+    piecesPartie = 0,   -- pièces ramassées dans la partie en cours
+    parties = {},       -- pièces ramassées lors des dernières parties terminées
 }
 pcall(function()
     if isfile and readfile and isfile(FICHIER_STATS) then
@@ -102,6 +104,13 @@ pcall(function()
                     statsMM2.victoires[role] = math.max(0, tonumber(donnees.victoires[role]) or 0)
                 end
             end
+            if type(donnees.parties) == "table" then
+                for _, v in ipairs(donnees.parties) do
+                    if type(v) == "number" and #statsMM2.parties < 12 then
+                        table.insert(statsMM2.parties, math.max(0, math.floor(v)))
+                    end
+                end
+            end
         end
     end
 end)
@@ -111,11 +120,26 @@ local function sauvegarderStatsMM2()
         writefile(FICHIER_STATS, game:GetService("HttpService"):JSONEncode(statsMM2))
     end)
 end
-local function ajouterPieceStats()
-    statsMM2.piecesTotal = statsMM2.piecesTotal + 1
-    statsMM2.sessionPieces = statsMM2.sessionPieces + 1
-    sauvegarderStatsMM2()
+-- Sources de comptage des pièces (voir brancher() et succes()) :
+--  1) l'événement serveur « CoinCollected » (le plus fiable, marche aussi à la main) ;
+--  2) à défaut, la disparition d'une pièce près de toi (auto farm).
+local statsSale, prochaineSauvStats = false, 0
+local dernierSacPieces = 0
+local function ajouterPiecesStats(n)
+    n = math.floor(tonumber(n) or 1)
+    if n <= 0 then return end
+    statsMM2.piecesTotal = statsMM2.piecesTotal + n
+    statsMM2.sessionPieces = statsMM2.sessionPieces + n
+    statsMM2.piecesPartie = statsMM2.piecesPartie + n
+    statsSale = true
+    if os.clock() >= prochaineSauvStats then
+        prochaineSauvStats = os.clock() + 3
+        statsSale = false
+        sauvegarderStatsMM2()
+    end
 end
+local function ajouterPieceStats() ajouterPiecesStats(1) end
+local remoteCoinVu = false -- passe à true dès que l'événement serveur de pièce a été reçu
 
 local function valeurConfig(cle, defaut)
     local v = configChargee[cle]
@@ -922,6 +946,66 @@ local nouvelleMancheAnnoncee = false
 local generationManche = 0
 local dernierRoleServeur = 0
 local connexionsMort = {}
+-- Suivi de TA manche : rôle joué, participation, murder de la manche (pour les victoires).
+local suiviManche = { role = nil, participe = false, murderNom = nil }
+
+-- Appelée à chaque fin de manche : range le score de la partie dans l'historique
+-- et ajoute une victoire si ton camp a gagné.
+local function enregistrerFinManche(roleGagnant)
+	local role = suiviManche.role
+	local participe = suiviManche.participe or statsMM2.piecesPartie > 0
+	local murderNom = suiviManche.murderNom
+	local piecesPartie = statsMM2.piecesPartie
+
+	-- Historique par partie (uniquement si tu as participé ou ramassé des pièces)
+	if participe then
+		table.insert(statsMM2.parties, piecesPartie)
+		while #statsMM2.parties > 12 do table.remove(statsMM2.parties, 1) end
+	end
+	statsMM2.piecesPartie = 0
+	dernierSacPieces = 0
+	suiviManche.role, suiviManche.participe, suiviManche.murderNom = nil, false, nil
+	sauvegarderStatsMM2()
+
+	if not participe then return end
+
+	-- Le murder est-il mort ? On regarde tout de suite, puis 0,6 s plus tard
+	-- (la mort peut être répliquée un instant après l'événement de fin).
+	local elimineAvant = murderNom ~= nil and joueursElimines[murderNom] == true
+	local function murderMort()
+		if not murderNom then return nil end
+		if elimineAvant then return true end
+		local pm = Players:FindFirstChild(murderNom)
+		if not pm then return true end
+		local hm = pm.Character and pm.Character:FindFirstChildOfClass("Humanoid")
+		return hm == nil or hm.Health <= 0
+	end
+	local mortTout = murderMort()
+	local function conclure()
+		local murderGagne = nil
+		if roleGagnant == "murder" then
+			murderGagne = true
+		elseif roleGagnant ~= nil then
+			murderGagne = false
+		else
+			local mort = mortTout or murderMort()
+			if mort ~= nil then murderGagne = not mort end
+		end
+		if murderGagne == nil then return end
+		local bucket = (role == "murder" or role == "sherif") and role or "innocent"
+		-- le murder gagne quand murderGagne ; les autres gagnent quand il perd
+		if (bucket == "murder") == murderGagne then
+			statsMM2.victoires[bucket] = statsMM2.victoires[bucket] + 1
+			sauvegarderStatsMM2()
+		end
+	end
+	if roleGagnant ~= nil or mortTout == true then
+		conclure()
+	else
+		task.delay(0.6, conclure)
+	end
+end
+
 do
 	local RS = game:GetService("ReplicatedStorage")
 	local function normaliser(v)
@@ -959,10 +1043,39 @@ do
 		local nomEvt = string.lower(o.Name)
 		local finManche = string.find(nomEvt, "roundend", 1, true) or string.find(nomEvt, "endround", 1, true)
 			or string.find(nomEvt, "winner", 1, true) or string.find(nomEvt, "gameover", 1, true)
+		-- Événement serveur « pièce ramassée » (CoinCollected / CandyCollected...)
+		local pieceRemote = (string.find(nomEvt, "coin", 1, true) or string.find(nomEvt, "candy", 1, true))
+			and string.find(nomEvt, "collect", 1, true)
 		pcall(function()
 			connecter(o.OnClientEvent, function(...)
 				if fermee then return end
+				if pieceRemote then
+					remoteCoinVu = true
+					-- Arguments habituels : (type, pièces dans le sac, sac maximum).
+					-- On compte la hausse du sac ; si aucun nombre n'est fourni, 1 pièce.
+					local courant = nil
+					for i = 1, select("#", ...) do
+						local a = select(i, ...)
+						if type(a) == "number" then courant = a break end
+					end
+					local gain = 1
+					if courant then
+						if courant > dernierSacPieces then
+							gain = courant - dernierSacPieces
+						elseif courant < dernierSacPieces then
+							gain = courant
+						else
+							gain = 0
+						end
+						dernierSacPieces = courant
+						if gain > 10 then gain = 1 end
+					end
+					ajouterPiecesStats(gain)
+					return
+				end
 				if finManche then
+					-- Même fin de manche signalée par plusieurs événements : on ne la traite qu'une fois.
+					if latchFinManche and os.clock() - tFinManche < 10 then return end
                     statsMM2.manches = statsMM2.manches + 1
                     -- N’enregistre une victoire que si le payload de l’événement indique explicitement le rôle gagnant.
                     local roleGagnant = nil
@@ -980,8 +1093,9 @@ do
                             elseif string.find(txt, "innocent", 1, true) or string.find(txt, "hero", 1, true) then roleGagnant = "innocent" end
                         end
                     end
-                    if roleGagnant then statsMM2.victoires[roleGagnant] = statsMM2.victoires[roleGagnant] + 1 end
-                    sauvegarderStatsMM2()
+                    -- Victoire : lue dans l'événement si le jeu indique le gagnant, sinon déduite
+                    -- (murder mort ou encore en vie à la fin de la manche).
+                    enregistrerFinManche(roleGagnant)
 					mancheTerminee = true
 					latchFinManche, tFinManche = true, os.clock()
 					finMancheEnAttente = true
@@ -1012,6 +1126,16 @@ do
 
 						for nom, role in pairs(res) do
 							if not joueursElimines[nom] then rolesServeur[nom] = role end
+							if role == "murder" then suiviManche.murderNom = nom end
+						end
+						local moi = res[joueur.Name]
+						if moi then
+							suiviManche.participe = true
+							if moi == "murder" or moi == "sherif" then
+								suiviManche.role = moi
+							elseif not suiviManche.role then
+								suiviManche.role = moi
+							end
 						end
 					end
 				end
@@ -1224,6 +1348,18 @@ local function calculerRoles()
 	infoMurder = murder and murder.Name or "—"
 	infoSherif = sherif and sherif.Name or "—"
 	infoHeros = heros and heros.Name or "—"
+
+	-- Mémorise ton rôle et le murder de la manche (pour les victoires)
+	if infoManche == "En cours" then
+		if murder then suiviManche.murderNom = murder.Name end
+		local moi = nouveau[joueur]
+		if moi == "murder" or moi == "sherif" then
+			suiviManche.role, suiviManche.participe = moi, true
+		elseif moi == "heros" then
+			suiviManche.role = suiviManche.role or "heros"
+			suiviManche.participe = true
+		end
+	end
 end
 
 function couleurRole(role)
@@ -1967,9 +2103,19 @@ texte(profil, {
     TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 4,
 })
 
+-- string.upper ne met pas les lettres accentuées en majuscules (« RéSUMé ») : on les convertit à part.
+local function majuscules(txt)
+	local r = string.upper(txt)
+	for min, maj in pairs({ ["é"] = "É", ["è"] = "È", ["ê"] = "Ê", ["ë"] = "Ë", ["à"] = "À", ["â"] = "Â",
+		["î"] = "Î", ["ï"] = "Ï", ["ô"] = "Ô", ["ù"] = "Ù", ["û"] = "Û", ["ç"] = "Ç" }) do
+		r = string.gsub(r, min, maj)
+	end
+	return r
+end
+
 local function section(page, titre)
 	local l = texte(page, {
-		Size = UDim2.new(1, 0, 0, 22), Text = string.upper(titre), TextColor3 = COL.ORCHIDEE,
+		Size = UDim2.new(1, 0, 0, 22), Text = majuscules(titre), TextColor3 = COL.ORCHIDEE,
 		Font = Enum.Font.GothamBlack, TextSize = 11,
 	})
 	l.LayoutOrder = ordre(page)
@@ -2631,7 +2777,7 @@ creerPage("Outils")
 creerPage("Paramètres")
 creerPage("Statistiques")
 
-do
+local function construireInterfaceStats()
 section(pages["Protection"], "Statistiques de session")
 local carteStats = carte(pages["Protection"], 76)
 local texteStats = texte(carteStats, {
@@ -2675,7 +2821,7 @@ for i, definition in ipairs(definitionsTuiles) do
     creer("UIStroke", {Color = definition[3], Transparency = 0.55, Thickness = 1}, tuile)
     texte(tuile, {
         Size = UDim2.new(1, -14, 0, 17), Position = UDim2.fromOffset(8, 6),
-        Text = string.upper(definition[1]), TextColor3 = COL.MUET, TextSize = 9,
+        Text = majuscules(definition[1]), TextColor3 = COL.MUET, TextSize = 9,
         Font = Enum.Font.GothamMedium, TextXAlignment = Enum.TextXAlignment.Left,
     })
     tuilesStats[i] = texte(tuile, {
@@ -2685,29 +2831,75 @@ for i, definition in ipairs(definitionsTuiles) do
         TextTruncate = Enum.TextTruncate.AtEnd,
     })
 end
-section(pages["Statistiques"], "Rythme de collecte")
-local carteGraphique = carte(pages["Statistiques"], 156)
+section(pages["Statistiques"], "Pièces par partie")
+local carteGraphique = carte(pages["Statistiques"], 236)
 texte(carteGraphique, {
-    Size = UDim2.new(1, -24, 0, 20), Position = UDim2.fromOffset(12, 8),
-    Text = "Pièces ramassées toutes les 10 secondes · récent à droite", TextColor3 = COL.MUET, TextSize = 10,
+    Size = UDim2.new(0.55, -18, 0, 18), Position = UDim2.fromOffset(18, 10),
+    Text = "Pièces ramassées par partie", Font = Enum.Font.GothamBold, TextSize = 12,
 })
-local barresGraphique = {}
-for i = 1, 12 do
+local texteResumeGraphique = texte(carteGraphique, {
+    Size = UDim2.new(0.45, -18, 0, 18), Position = UDim2.new(0.55, 0, 0, 10),
+    Text = "", TextColor3 = COL.MUET, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Right,
+})
+
+-- Zone de tracé : axe vertical gradué (5 repères), lignes de grille, une barre par partie.
+local NB_BARRES = 12
+local MARGE_G, MARGE_D, MARGE_H, MARGE_B = 46, 18, 44, 30
+local zoneGraphique = creer("Frame", {
+    Name = "ZoneGraphique", BackgroundTransparency = 1, BorderSizePixel = 0,
+    Position = UDim2.fromOffset(MARGE_G, MARGE_H),
+    Size = UDim2.new(1, -(MARGE_G + MARGE_D), 1, -(MARGE_H + MARGE_B)),
+}, carteGraphique)
+local etiquettesY = {}
+for k = 0, 5 do
+    creer("Frame", {
+        Name = "Grille" .. k, BorderSizePixel = 0, AnchorPoint = Vector2.new(0, 0.5),
+        BackgroundColor3 = (k == 0) and COL.MUET or COL.BORDURE,
+        BackgroundTransparency = (k == 0) and 0.45 or 0.55,
+        Position = UDim2.new(0, 0, 1 - k / 5, 0), Size = UDim2.new(1, 0, 0, 1),
+    }, zoneGraphique)
+    etiquettesY[k] = texte(zoneGraphique, {
+        Size = UDim2.fromOffset(36, 14), AnchorPoint = Vector2.new(0, 0.5),
+        Position = UDim2.new(0, -44, 1 - k / 5, 0), Text = "0",
+        TextColor3 = COL.MUET, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Right,
+    })
+end
+local barresGraphique, valeursGraphique, etiquettesX = {}, {}, {}
+for i = 1, NB_BARRES do
+    local cx = (i - 0.5) / NB_BARRES
     local barre = creer("Frame", {
-        Name = "BarrePieces" .. i, AnchorPoint = Vector2.new(0, 1),
-        Position = UDim2.new((i - 1) / 12, 12, 1, -31),
-        Size = UDim2.new(1 / 12, -5, 0, 3), BackgroundColor3 = COL.ROUGE, BorderSizePixel = 0,
-    }, carteGraphique)
+        Name = "BarrePieces" .. i, AnchorPoint = Vector2.new(0.5, 1), BorderSizePixel = 0,
+        BackgroundColor3 = COL.ROUGE, Position = UDim2.new(cx, 0, 1, 0),
+        Size = UDim2.new(0.56 / NB_BARRES, 0, 0, 0), Visible = false,
+    }, zoneGraphique)
     coins(barre, 3)
     barresGraphique[i] = barre
+    valeursGraphique[i] = texte(zoneGraphique, {
+        Name = "ValeurPieces" .. i, AnchorPoint = Vector2.new(0.5, 1),
+        Position = UDim2.new(cx, 0, 1, -4), Size = UDim2.fromOffset(40, 12), Text = "",
+        TextColor3 = COL.TEXTE, TextSize = 10, Font = Enum.Font.GothamBold,
+        TextXAlignment = Enum.TextXAlignment.Center, Visible = false,
+    })
+    etiquettesX[i] = texte(zoneGraphique, {
+        Name = "AxeX" .. i, AnchorPoint = Vector2.new(0.5, 0),
+        Position = UDim2.new(cx, 0, 1, 8), Size = UDim2.fromOffset(46, 12), Text = "",
+        TextColor3 = COL.MUET, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Center, Visible = false,
+    })
 end
-texte(carteGraphique, {
-    Size = UDim2.new(1, -24, 0, 14), Position = UDim2.new(0, 12, 1, -22),
-    Text = "Faible collecte  ←                         →  Forte collecte", TextColor3 = COL.MUET, TextSize = 9,
+local texteVideGraphique = texte(zoneGraphique, {
+    Size = UDim2.fromScale(1, 1), Text = "Aucune partie enregistrée pour l'instant",
+    TextColor3 = COL.MUET, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Center, Visible = false,
 })
-local historiquePieces = {}
-local piecesDernierEchantillon = statsMM2.sessionPieces
-local tDernierEchantillon = os.clock()
+local COULEUR_BARRE_PASSEE = Color3.fromRGB(150, 42, 56)
+-- Graduation sur 5 intervalles, avec une échelle minimale de 0 à 50.
+local function pasGraduation(maximum)
+    local pas = 1
+    for _, p in ipairs({ 1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000, 10000 }) do
+        pas = p
+        if p * 5 >= maximum then break end
+    end
+    return pas
+end
 local boutonResetStats = creer("TextButton", {
     Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = Color3.fromRGB(55, 22, 30),
     BorderSizePixel = 0, Text = "Réinitialiser les statistiques de session",
@@ -2716,10 +2908,10 @@ local boutonResetStats = creer("TextButton", {
 coins(boutonResetStats, 10)
 connecter(boutonResetStats.Activated, function()
     statsMM2.sessionPieces = 0
-    table.clear(historiquePieces)
-    piecesDernierEchantillon = 0
-    tDernierEchantillon = os.clock()
-    for _, barre in ipairs(barresGraphique) do barre.Size = UDim2.new(barre.Size.X.Scale, barre.Size.X.Offset, 0, 3) end
+    statsMM2.piecesPartie = 0
+    dernierSacPieces = 0
+    table.clear(statsMM2.parties)
+    sauvegarderStatsMM2()
 end)
 
 task.spawn(function()
@@ -2734,26 +2926,61 @@ task.spawn(function()
         tuilesStats[5].Text = string.format("%02d min %02d sec", math.floor(moyenneSurvie / 60), math.floor(moyenneSurvie) % 60)
         tuilesStats[6].Text = string.format("Murder %d  ·  Sheriff %d  ·  Innocent %d",
             statsMM2.victoires.murder, statsMM2.victoires.sherif, statsMM2.victoires.innocent)
-        local maintenant = os.clock()
-        if maintenant - tDernierEchantillon >= 10 then
-            local gain = math.max(0, statsMM2.sessionPieces - piecesDernierEchantillon)
-            table.insert(historiquePieces, gain)
-            while #historiquePieces > 12 do table.remove(historiquePieces, 1) end
-            piecesDernierEchantillon, tDernierEchantillon = statsMM2.sessionPieces, maintenant
-            local maximum = 1
-            for _, v in ipairs(historiquePieces) do maximum = math.max(maximum, v) end
-            for i, barre in ipairs(barresGraphique) do
-                local valeur = historiquePieces[#historiquePieces - 12 + i] or 0
-                local hauteur = math.max(3, math.floor(78 * valeur / maximum))
-                barre.Size = UDim2.new(barre.Size.X.Scale, barre.Size.X.Offset, 0, hauteur)
-                barre.BackgroundColor3 = (i == #historiquePieces) and COL.ORCHIDEE or COL.ROUGE
+        -- Graphique : les 11 dernières parties terminées + la partie en cours (dernière barre)
+        local liste = {}
+        local debut = math.max(1, #statsMM2.parties - 10)
+        for i = debut, #statsMM2.parties do liste[#liste + 1] = statsMM2.parties[i] end
+        liste[#liste + 1] = statsMM2.piecesPartie
+        local maximum = 0
+        for _, v in ipairs(liste) do maximum = math.max(maximum, v) end
+        local pas = math.max(10, pasGraduation(maximum))
+        local hautAxe = pas * 5
+        for k = 0, 5 do etiquettesY[k].Text = tostring(pas * k) end
+        local vide = #statsMM2.parties == 0 and statsMM2.piecesPartie == 0
+        texteVideGraphique.Visible = vide
+        for i = 1, NB_BARRES do
+            local valeur = (not vide) and liste[#liste - NB_BARRES + i] or nil
+            local barre, etiquette, axe = barresGraphique[i], valeursGraphique[i], etiquettesX[i]
+            if valeur then
+                local ratio = math.min(1, valeur / hautAxe)
+                local actuelle = (i == NB_BARRES)
+                barre.Visible = valeur > 0
+                barre.Size = UDim2.new(0.56 / NB_BARRES, 0, ratio, 0)
+                barre.BackgroundColor3 = actuelle and COL.ORCHIDEE or COULEUR_BARRE_PASSEE
+                etiquette.Visible = true
+                etiquette.Text = tostring(valeur)
+                etiquette.Position = UDim2.new((i - 0.5) / NB_BARRES, 0, 1 - ratio, -4)
+                etiquette.TextColor3 = actuelle and COL.BLANC or COL.TEXTE
+                axe.Visible = true
+                axe.Text = actuelle and "Actuelle" or ("-" .. tostring(NB_BARRES - i))
+                axe.TextColor3 = actuelle and COL.ORCHIDEE or COL.MUET
+            else
+                barre.Visible = false
+                etiquette.Visible = false
+                axe.Visible = false
             end
+        end
+        if #statsMM2.parties > 0 then
+            local somme, record = 0, 0
+            for _, v in ipairs(statsMM2.parties) do somme = somme + v record = math.max(record, v) end
+            texteResumeGraphique.Text = string.format("Moyenne %d  ·  Record %d",
+                math.floor(somme / #statsMM2.parties + 0.5), record)
+        else
+            texteResumeGraphique.Text = "En attente de la fin d'une partie"
+        end
+        -- Sauvegarde différée des statistiques (les pièces ne sont pas écrites à chaque ramassage)
+        if statsSale and os.clock() >= prochaineSauvStats then
+            statsSale = false
+            prochaineSauvStats = os.clock() + 3
+            sauvegarderStatsMM2()
         end
         task.wait(1)
     end
 end)
 
-end -- portée locale des éléments statistiques
+end -- construireInterfaceStats
+
+construireInterfaceStats()
 
 section(pages["Protection"], "Défense")
 interrupteur(pages["Protection"], "Anti Fling", "Bloque les flings et les collisions des joueurs", false, function(v)
@@ -3902,6 +4129,7 @@ local ajoutsEnFile = {}
 local traitementAjouts = false
 local connexionIndexAjout, connexionIndexSuppression = nil, nil
 local mettreEnFile
+local succes -- définie plus bas ; déclarée ici car utilisée par le suivi des pièces disparues
 local generationIndex = 0
 local verifierLobbyPourIndex = nil
 
@@ -3937,6 +4165,12 @@ local function connecterIndexWorkspace()
 			piecesConnues[obj] = nil
 			avaitTI[obj] = nil
 			piecesVivantes = math.max(0, piecesVivantes - 1)
+			-- Pièce disparue tout près de toi pendant la manche = ramassée (même si ce n'était
+			-- pas la cible en cours). Pas de comptage à la fin de manche (nettoyage de la map).
+			if succes and racine and racine.Parent and not mancheTerminee and not latchFinManche
+				and (obj.Position - racine.Position).Magnitude < 14 then
+				succes(obj)
+			end
 		end)
 	end)
 end
@@ -4333,11 +4567,21 @@ local function nouvelleManche()
 	table.clear(abandonnees)
 end
 
-local function succes()
+local piecesCompteesFarm = setmetatable({}, { __mode = "k" })
+succes = function(piece)
+	if piece then
+		if piecesCompteesFarm[piece] then return end
+		piecesCompteesFarm[piece] = true
+	end
 	recoltesManche = recoltesManche + 1
 	recolteesSession = recolteesSession + 1
 	recolteesTotal = recolteesTotal + 1
-    ajouterPieceStats()
+	-- Les statistiques viennent normalement de l'événement serveur « pièce ramassée ».
+	-- Ce comptage de secours ne sert que si cet événement n'existe pas sur ce jeu
+	-- (attente de 0,5 s pour ne pas compter deux fois la même pièce).
+	task.delay(0.5, function()
+		if not remoteCoinVu then ajouterPieceStats() end
+	end)
 	derniereRecolte = os.clock()
 	echecs = 0
 end
@@ -4632,7 +4876,7 @@ local function pas(dt)
 		tempsContact = 0
 	end
 	if cible and not recoltable(cible) then
-		if enContact or (r.Position - cible.Position).Magnitude < 12 then succes() end
+		if enContact or (r.Position - cible.Position).Magnitude < 12 then succes(cible) end
 		cible = nil
 		enContact = false
 		tempsContact = 0
