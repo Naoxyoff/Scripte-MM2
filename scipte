@@ -4083,12 +4083,14 @@ local murderVu, tMurderAbsent = false, nil
 local murderNom = nil
 local vuLobbyApresFin = false
 local prochainVerifSacPlein = 0
+local resetEffectue = false
 local pauseStallJusqua, derniereRecolte = 0, 0
 local DELAI_SANS_RECOLTE = 25
 local DELAI_MURDER_ABSENT = 2.5
 
 local function nouvelleManche()
 	murderVu, tMurderAbsent = false, nil
+	resetEffectue = false
 	murderNom = nil
 	pauseStallJusqua, derniereRecolte = 0, os.clock()
 	recoltesManche = 0
@@ -4256,13 +4258,27 @@ local function pas(dt)
 	-- bloquait le farm indéfiniment dans les modes sans changement de manche (Zombie).
 	if sacPlein and t >= prochainVerifSacPlein then
 		prochainVerifSacPlein = t + 0.5
-		if sacPleinUI() == false then
+		local ui = sacPleinUI()
+		if ui == false then
 			sacPlein = false
 			resetFaitManche = false
+			resetEffectue = false
 			echecs = 0
 			etatResetSac.sacPlein = false
 			etatResetSac.resetFait = false
 			notif("Sac vidé : farm repris", VERT_ON)
+		elseif ui == true and farmCfg.resetPlein and not resetEffectue
+			and (t - (etatResetSac.dernierReset or 0)) > COOLDOWN_RESET then
+			-- Correctif : le reset ne dépend plus du verrou "une seule détection par manche".
+			-- Il part dès que le sac est confirmé plein et que l'option est activée.
+			resetEffectue = true
+			etatResetSac.resetFait = true
+			etatResetSac.dernierReset = t
+			dernierReset = t
+			notif("Sac plein : reset", COL.ORANGE)
+			pcall(function()
+				if h and h.Parent and h.Health > 0 then h.Health = 0 end
+			end)
 		end
 	end
 	local mort = joueursElimines[joueur.Name] == true
