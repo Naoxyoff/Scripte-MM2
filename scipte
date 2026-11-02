@@ -4424,7 +4424,43 @@ local function creerMaintien(r)
 	maintien.Parent = r
 end
 local etatHumanoideAvantFarm = nil
+local sonsPasFarm, volumesPasFarm, connPasFarm = {}, {}, nil
+local function couperPasFarm(perso)
+	if not perso then return end
+	if not connPasFarm then
+		local function ajouter(o)
+			if o:IsA("Sound") then
+				local n = string.lower(o.Name)
+				if n == "running" or n == "walking" or n == "footsteps" or n == "footstep" then
+					if volumesPasFarm[o] == nil then
+						volumesPasFarm[o] = o.Volume
+						sonsPasFarm[#sonsPasFarm + 1] = o
+					end
+					pcall(function() o.Volume = 0; o:Stop() end)
+				end
+			end
+		end
+		for _, o in ipairs(perso:GetDescendants()) do ajouter(o) end
+		connPasFarm = connecter(perso.DescendantAdded, ajouter)
+	end
+	for i = 1, #sonsPasFarm do
+		local s = sonsPasFarm[i]
+		if s.Parent and (s.Volume ~= 0 or s.Playing) then
+			pcall(function() s.Volume = 0; s:Stop() end)
+		end
+	end
+end
+local function restaurerPasFarm()
+	if connPasFarm then deconnecter(connPasFarm); connPasFarm = nil end
+	for _, s in ipairs(sonsPasFarm) do
+		if s.Parent and volumesPasFarm[s] ~= nil then
+			pcall(function() s.Volume = volumesPasFarm[s] end)
+		end
+	end
+	sonsPasFarm, volumesPasFarm = {}, {}
+end
 local function figerAnimations(perso, h)
+	couperPasFarm(perso)
 	pcall(function()
 		local anim = perso and perso:FindFirstChild("Animate")
 		if anim and anim:IsA("LocalScript") then anim.Disabled = true end
@@ -4512,6 +4548,7 @@ end
 local function quitterFarm()
 	if not enFarm then return end
 	enFarm = false
+	restaurerPasFarm()
 	flyControl.farmActif = false
 	cible = nil
 	enContact = false
@@ -4901,6 +4938,7 @@ local function pas(dt)
 		notif("Collecte lancée", VERT_ON)
 	end
 	etatTexte = "Collecte en cours"
+	couperPasFarm(perso)
 	if t >= prochainRafraichissement then
 		prochainRafraichissement = t + 0.35
 		rafraichirFarm(r, h)
