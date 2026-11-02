@@ -1472,21 +1472,36 @@ end
 local modeZombie
 local function estZombieOuSurvivant(p)
     if not p then return nil end
-    local perso = p.Character
-    if perso and estDansLobby(perso) then return nil end
-
-    if p.Team and estNomZombie(p.Team.Name) then return true end
-    if attributZombie(p) or attributZombie(perso) then return true end
-    for _, conteneur in ipairs({ perso, p:FindFirstChildOfClass("Backpack") }) do
-        if conteneur then
-            for _, objet in ipairs(conteneur:GetChildren()) do
-                if objet:IsA("Tool") and estNomZombie(objet.Name) then return true end
-            end
-        end
+    local Z = flyControl.Z
+    if Z.vusGen ~= generationManche then
+        Z.vusGen = generationManche
+        Z.vus = {}
     end
-    -- Infection : plusieurs porteurs de couteau en même temps = zombies.
-    if (flyControl.Z.nbCouteaux or 0) >= 2 and possedeCouteauZombie(p) then return true end
-    return false
+    local perso = p.Character
+    if perso and estDansLobby(perso) then
+        Z.vus[p.Name] = nil
+        return nil
+    end
+    if Z.vus[p.Name] then return true end
+    local zombie = false
+    if p.Team and estNomZombie(p.Team.Name) then
+        zombie = true
+    elseif attributZombie(p) or attributZombie(perso) then
+        zombie = true
+    else
+        for _, conteneur in ipairs({ perso, p:FindFirstChildOfClass("Backpack") }) do
+            if conteneur then
+                for _, objet in ipairs(conteneur:GetChildren()) do
+                    if objet:IsA("Tool") and estNomZombie(objet.Name) then zombie = true break end
+                end
+            end
+            if zombie then break end
+        end
+        -- Infection : plusieurs porteurs de couteau en même temps = zombies.
+        if not zombie and (Z.nbCouteaux or 0) >= 2 and possedeCouteauZombie(p) then zombie = true end
+    end
+    if zombie then Z.vus[p.Name] = true end
+    return zombie
 end
 flyControl.Z.retirer = function(p)
     local h = flyControl.Z.halos[p]
@@ -4409,6 +4424,18 @@ local function creerMaintien(r)
 	maintien.Parent = r
 end
 local etatHumanoideAvantFarm = nil
+local function figerAnimations(perso, h)
+	pcall(function()
+		local anim = perso and perso:FindFirstChild("Animate")
+		if anim and anim:IsA("LocalScript") then anim.Disabled = true end
+	end)
+	pcall(function()
+		local animator = h and h:FindFirstChildOfClass("Animator")
+		if animator then
+			for _, piste in ipairs(animator:GetPlayingAnimationTracks()) do piste:Stop(0) end
+		end
+	end)
+end
 local function entrerFarm(r, h)
 	if enFarm then return end
 	if h then
@@ -4421,6 +4448,7 @@ local function entrerFarm(r, h)
 		}
 	end
 	enFarm = true
+	figerAnimations(r.Parent, h)
 	flyControl.farmActif = true
 	flyEtaitActif = flyControl.flyOn
 	if flyEtaitActif then flyControl.activerFly(false) end
@@ -4494,6 +4522,10 @@ local function quitterFarm()
 		maintien = nil
 	end
 	local r, h = racine, humanoide
+	pcall(function()
+		local a = r and r.Parent and r.Parent:FindFirstChild("Animate")
+		if a and a:IsA("LocalScript") then a.Disabled = false end
+	end)
 	if r and r.Parent then
 		pcall(function()
 			r.AssemblyLinearVelocity = Vector3.zero
@@ -4577,6 +4609,7 @@ restaurerPositionFinManche = function()
 	end)
 end
 local function rafraichirFarm(r, h)
+	figerAnimations(r.Parent, h)
 	pcall(function()
 		if not h.PlatformStand then h.PlatformStand = true end
 		if h:GetState() ~= Enum.HumanoidStateType.Physics then
