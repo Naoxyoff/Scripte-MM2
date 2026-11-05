@@ -1,3 +1,26 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -5142,7 +5165,8 @@ local function pas(dt)
 			resetAutoFarmSilencieux(h)
 		end
 	end
-	local mort = joueursElimines[joueur.Name] == true
+	-- L'etat elimine verrouille les roles, mais ne doit pas bloquer le farm apres un respawn.
+	local mort = h.Health <= 0
 	local finMurder = false
 	if infoMurder ~= "—" then
 		murderVu, tMurderAbsent = true, nil
