@@ -978,6 +978,7 @@ local halos, etiquettes = {}, {}
 local boites = {}
 local rolesParJoueur = {}
 local rolesServeur = {}
+local verrouRoles = { murder = nil, sherif = nil }
 local calculerRoles
 local joueursElimines = {}
 local mancheTerminee = false
@@ -1111,6 +1112,20 @@ do
 		return trouve and res or nil
 	end
 
+	-- Un Murder / Sheriff verrouillé ne peut être remplacé que si son détenteur
+	-- n'est plus en partie (parti, mort, éliminé ou revenu au lobby).
+	local function verrouPeutChanger(nomVerrou)
+		if not nomVerrou then return true end
+		local joueurVerrou = Players:FindFirstChild(nomVerrou)
+		if not joueurVerrou or joueursElimines[nomVerrou] then return true end
+		local perso = joueurVerrou.Character
+		local hum = perso and perso:FindFirstChildOfClass("Humanoid")
+		if not hum or hum.Health <= 0 then return true end
+		local dansLobby = flyControl.Z and flyControl.Z.dansLobby
+		if dansLobby and dansLobby(perso) then return true end
+		return false
+	end
+
 	local function brancher(o)
 		if not o:IsA("RemoteEvent") then return end
 		local nomEvt = string.lower(o.Name)
@@ -1175,6 +1190,7 @@ do
 						if restaurerPositionFinManche then restaurerPositionFinManche() end
 					end)
 					table.clear(rolesServeur)
+					verrouRoles.murder, verrouRoles.sherif = nil, nil
 					table.clear(joueursElimines)
 					for _, p in ipairs(Players:GetPlayers()) do
 						rolesParJoueur[p] = "innocent"
@@ -1199,6 +1215,20 @@ do
 						end
 						dernierRoleServeur = os.clock()
 
+						-- Nouveau Murder annoncé alors que l'ancien n'est plus en partie : nouvelle manche.
+						local murderAnnonce = nil
+						for nom, role in pairs(res) do
+							if role == "murder" then murderAnnonce = tostring(nom) break end
+						end
+						if murderAnnonce and verrouRoles.murder and murderAnnonce ~= verrouRoles.murder
+							and verrouPeutChanger(verrouRoles.murder) then
+							table.clear(rolesServeur)
+							table.clear(joueursElimines)
+							verrouRoles.murder, verrouRoles.sherif = nil, nil
+							nouvelleMancheAnnoncee = true
+							generationManche = generationManche + 1
+						end
+
 						local nouvelleDistribution = false
 						for nom, role in pairs(res) do
 							if role ~= "innocent" and joueursElimines[tostring(nom)] then
@@ -1208,6 +1238,8 @@ do
 						end
 						if nouvelleDistribution and not mancheTerminee then
 							table.clear(joueursElimines)
+							table.clear(rolesServeur)
+							verrouRoles.murder, verrouRoles.sherif = nil, nil
 							nouvelleMancheAnnoncee = true
 							generationManche = generationManche + 1
 						end
@@ -1232,8 +1264,23 @@ do
                             elseif correspondancesDisplay > 1 then
                                 nom = nil
                             end
-							if nom and not joueursElimines[nom] then rolesServeur[nom] = role end
-							if nom and role == "murder" then suiviManche.murderNom = nom end
+							if nom and not joueursElimines[nom] then
+								if role == "murder" or role == "sherif" then
+									-- Rôle donné en début de manche : verrouillé jusqu'à la fin de la manche.
+									local ancien = verrouRoles[role]
+									if ancien and ancien ~= nom and not verrouPeutChanger(ancien) then
+										-- ignoré : le rôle de cette manche est déjà attribué
+									else
+										if ancien and ancien ~= nom then rolesServeur[ancien] = nil end
+										verrouRoles[role] = nom
+										rolesServeur[nom] = role
+									end
+								else
+									local actuel = rolesServeur[nom]
+									if actuel ~= "murder" and actuel ~= "sherif" then rolesServeur[nom] = role end
+								end
+							end
+							if nom and role == "murder" and rolesServeur[nom] == "murder" then suiviManche.murderNom = nom end
 						end
 						local moi = res[joueur.Name]
                         if not moi then
@@ -1268,18 +1315,38 @@ end
 local infoManche, infoMurder, infoSherif, infoHeros, infoArme = "Aucune", "—", "—", "—", "Non"
 local couleurRole, retirerBoite, retirerHalo, retirerEtiquette, retirerArme, nettoyerChams
 flyControl.Z = { actif = false, halos = {} }
+-- Recherche de GunDrop mise en cache : la recherche récursive dans tout le workspace
+-- (très coûteuse en partie) n'a lieu qu'une fois, puis les événements alimentent le cache.
+do
+	local cache, derniereRecherche = nil, -1000
+	flyControl.trouverGunDrop = function()
+		if cache and cache.Parent then return cache end
+		cache = nil
+		local t = os.clock()
+		if t - derniereRecherche < 8 then return nil end
+		derniereRecherche = t
+		cache = workspace:FindFirstChild("GunDrop", true)
+		return cache
+	end
+	connecter(workspace.DescendantAdded, function(o)
+		if o.Name == "GunDrop" then
+			cache = o
+			derniereRecherche = os.clock()
+		end
+	end)
+end
 do
 local haloArme, boiteArme, etiquetteArme = nil, nil, nil
 local auraAttachement, fumeeArme, lumiereArme = nil, nil, nil
 local armesVues, tDerniereArme = false, 0
 local sheriffOrigine = nil
 local herosOrigine = nil
-local gunDropVu = workspace:FindFirstChild("GunDrop", true) ~= nil
+local gunDropVu = flyControl.trouverGunDrop() ~= nil
 local persoDuRole = {}
 local centreLobbyJoueurs, tCentreLobby = nil, 0
 local function obtenirCentreLobby()
 	local maintenant = os.clock()
-	if maintenant - tCentreLobby < 1 then return centreLobbyJoueurs end
+	if maintenant - tCentreLobby < (centreLobbyJoueurs and 30 or 2) then return centreLobbyJoueurs end
 	tCentreLobby = maintenant
 	centreLobbyJoueurs = nil
 	local lobby = workspace:FindFirstChild("Lobby") or workspace:FindFirstChild("lobby")
@@ -1321,7 +1388,7 @@ local centreLobbyChams, prochainScanLobbyChams = nil, 0
 local function estAuLobbyPourChams()
 	local maintenant = os.clock()
 	if maintenant >= prochainScanLobbyChams then
-		prochainScanLobbyChams = maintenant + 1
+		prochainScanLobbyChams = maintenant + (centreLobbyChams and 30 or 2)
 		centreLobbyChams = nil
 		local lobby = workspace:FindFirstChild("Lobby") or workspace:FindFirstChild("lobby")
 		if lobby then
@@ -1421,7 +1488,8 @@ calculerRoles = function()
 	local listeJoueurs = Players:GetPlayers()
 	local porteurs = {}
 	for _, p in ipairs(listeJoueurs) do
-		if joueurVivant(p) and not joueursElimines[p.Name] and aOutil(p, "Gun") then
+		if joueurVivant(p) and not joueursElimines[p.Name] and aOutil(p, "Gun")
+			and not (p.Character and estDansLobby(p.Character)) then
 			porteurs[#porteurs + 1] = p
 		end
 	end
@@ -1445,7 +1513,7 @@ calculerRoles = function()
 		end
 	end
 
-	local gunDropPresent = workspace:FindFirstChild("GunDrop", true) ~= nil
+	local gunDropPresent = flyControl.trouverGunDrop() ~= nil
 	if gunDropPresent then gunDropVu = true end
 	local sheriffMort = sheriffOrigine ~= nil and (joueursElimines[sheriffOrigine.Name] == true or not joueurVivant(sheriffOrigine))
 
@@ -1470,6 +1538,7 @@ calculerRoles = function()
 		and os.clock() - dernierRoleServeur > 10 then
 		armesVues = false
 		table.clear(rolesServeur)
+		verrouRoles.murder, verrouRoles.sherif = nil, nil
 		table.clear(joueursElimines)
 		table.clear(persoDuRole)
 		sheriffOrigine = nil
@@ -1522,6 +1591,8 @@ calculerRoles = function()
 				persoDuRole[p.Name] = nil
 				if p == herosOrigine then herosOrigine = nil end
 			end
+			r = "innocent"
+		elseif auLobby then
 			r = "innocent"
 		elseif p == murder and vivant then
 			r = "murder"
@@ -1778,7 +1849,7 @@ end
 local function majVisuel(joueurCible)
 	local perso = joueurCible.Character
 	local role = rolesParJoueur[joueurCible] or "innocent"
-    if joueursElimines[joueurCible.Name] then role = "innocent" end
+	if joueursElimines[joueurCible.Name] then role = "innocent" end
 	local hum = perso and perso:FindFirstChildOfClass("Humanoid")
 	if not hum then
 		retirerHalo(joueurCible)
@@ -1786,23 +1857,19 @@ local function majVisuel(joueurCible)
 		retirerEtiquette(joueurCible)
 		return
 	end
-	local rp = perso and perso:FindFirstChild("HumanoidRootPart")
-	local ok = rolesActifs and rp
+	local rp = perso:FindFirstChild("HumanoidRootPart")
 	local distance = 0
-	if ok and racine then
+	if rp and racine then
 		distance = (racine.Position - rp.Position).Magnitude
 	end
-	if not ok then
+
+	-- Chams : vert (innocent) par défaut pour tout le monde, lobby compris.
+	-- Murder / Sheriff / Héros ne prennent leur couleur qu'en manche (joueurs au lobby = vert).
+	local chamsVisibles = rolesActifs and rp ~= nil
+		and not (racine and distance > DISTANCE_MAX_CHAMS)
+	if not chamsVisibles then
 		retirerHalo(joueurCible)
-		retirerEtiquette(joueurCible)
-		return
-	end
-	if racine and distance > DISTANCE_MAX_CHAMS then
-		retirerHalo(joueurCible)
-		retirerEtiquette(joueurCible)
-		return
-	end
-	if flyControl.Z.actif and modeZombie() then
+	elseif flyControl.Z.actif and modeZombie() then
 		retirerHalo(joueurCible)
 		retirerBoite(joueurCible)
 	else
@@ -1826,28 +1893,30 @@ local function majVisuel(joueurCible)
 		h.FillTransparency = transparenceChams / 100
 		h.OutlineTransparency = 0.05
 		if estInvisible(perso) then
-		local b = boites[joueurCible]
-		if not b or not b.Parent or b.Adornee ~= rp then
-			if b then b:Destroy() end
-			b = Instance.new("BoxHandleAdornment")
-			b.Name = "RoleBoite"
-			b.Adornee = rp
-			b.Size = Vector3.new(3, 5.5, 2)
-			b.AlwaysOnTop = true
-			b.ZIndex = 5
-			b.Parent = rp
-			boites[joueurCible] = b
-		end
-		b.Color3 = c
-		b.Transparency = transparenceChams / 100
+			local b = boites[joueurCible]
+			if not b or not b.Parent or b.Adornee ~= rp then
+				if b then b:Destroy() end
+				b = Instance.new("BoxHandleAdornment")
+				b.Name = "RoleBoite"
+				b.Adornee = rp
+				b.Size = Vector3.new(3, 5.5, 2)
+				b.AlwaysOnTop = true
+				b.ZIndex = 5
+				b.Parent = rp
+				boites[joueurCible] = b
+			end
+			b.Color3 = c
+			b.Transparency = transparenceChams / 100
 		else
 			retirerBoite(joueurCible)
 		end
 	end
-	local pseudoVisible = nomsActifs and racine ~= nil and not estAuLobbyPourChams()
-		and hum ~= nil and hum.Health > 0 and distance <= DISTANCE_MAX_PSEUDO
+
+	-- Pseudos : indépendants des chams (fonctionnent même si Chams est désactivé).
+	local tete = perso:FindFirstChild("Head") or rp
+	local pseudoVisible = nomsActifs and tete ~= nil and racine ~= nil and not estAuLobbyPourChams()
+		and hum.Health > 0 and distance <= DISTANCE_MAX_PSEUDO
 	if pseudoVisible then
-		local tete = perso:FindFirstChild("Head") or rp
 		local e = etiquettes[joueurCible]
 		if not e or not e.Parent or e.Adornee ~= tete then
 			if e then e:Destroy() end
@@ -1910,7 +1979,7 @@ local function trouverArmeTombee()
 	if maintenant - tRechercheArme < 0.25 then return nil, nil end
 	tRechercheArme = maintenant
 	armeCache, objetArmeCache = nil, nil
-	local objet = workspace:FindFirstChild("GunDrop", true)
+	local objet = flyControl.trouverGunDrop()
 	if not objet then return nil, nil end
 	if objet:IsA("BasePart") then
 		armeCache = objet
@@ -2040,7 +2109,7 @@ lancerTache(function()
         local maintenant = os.clock()
         if maintenant >= prochainCalculRoles then
             DIAG.mesure("roles", calculerRoles)
-            prochainCalculRoles = maintenant + 0.25
+            prochainCalculRoles = maintenant + ((rolesActifs or nomsActifs or armeActive) and 0.25 or 0.6)
         end
         if (rolesActifs or nomsActifs or flyControl.Z.actif) and maintenant >= prochainCalculVisuels then
             for _, autre in ipairs(Players:GetPlayers()) do
@@ -2159,7 +2228,7 @@ connecter(gui.DescendantAdded, function(o)
 end)
 local echelleInterface = valeurConfig("echelleInterface", 100)
 -- Dimensions de reference de la barre reduite (identiques sur PC et emulateur).
-local BARRE_L, BARRE_H = 300, 68
+local BARRE_L, BARRE_H = 240, 42
 local scaleFenetre = creer("UIScale", {Scale = 1}, nil)
 local scaleBarre = nil
 local appliquerHUD = nil
@@ -2470,7 +2539,17 @@ local function creerPage(nom)
 	return p
 end
 local function selectionner(nom)
-	for n, p in pairs(pages) do p.Visible = (n == nom) end
+	for n, p in pairs(pages) do
+		local voir = (n == nom)
+		if voir and not p.Visible then
+			-- Entrée douce : la page glisse de quelques pixels vers sa place.
+			p.Position = UDim2.fromOffset(0, 14)
+			p.Visible = true
+			tw(p, { Position = UDim2.fromOffset(0, 0) }, 0.24, Enum.EasingStyle.Quint)
+		else
+			p.Visible = voir
+		end
+	end
 	for n, o in pairs(onglets) do
 		local sel = (n == nom)
 		tw(o.bouton, {
@@ -2479,6 +2558,12 @@ local function selectionner(nom)
             TextColor3 = sel and COL.BLANC or COL.MUET,
         }, 0.15)
 		tw(o.barre, { BackgroundTransparency = sel and 0 or 1 }, 0.15)
+		if o.contour then
+			tw(o.contour, {
+				Transparency = sel and 0.3 or 0.82,
+				Color = sel and Color3.fromRGB(220, 38, 55) or Color3.fromRGB(100, 36, 48),
+			}, 0.18)
+		end
 	end
 end
 local function ajouterOnglet(nom, index, libelle)
@@ -2490,21 +2575,25 @@ local function ajouterOnglet(nom, index, libelle)
 		TextXAlignment = Enum.TextXAlignment.Left, AutoButtonColor = false,
 	}, navigation)
 	coins(b, 11)
-    creer("UIStroke", { Thickness = 1, Color = Color3.fromRGB(100, 36, 48), Transparency = 0.82, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, b)
+    local contourOnglet = creer("UIStroke", { Thickness = 1, Color = Color3.fromRGB(100, 36, 48), Transparency = 0.82, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, b)
 	local barre = creer("Frame", {
 		Size = UDim2.fromOffset(4, 28), Position = UDim2.fromOffset(7, 6), BackgroundColor3 = Color3.fromRGB(255, 20, 50),
 		BackgroundTransparency = 1, BorderSizePixel = 0,
 	}, b)
 	pilule(barre)
 	connecter(b.MouseEnter, function()
-		if b.BackgroundTransparency > 0.5 then tw(b, { BackgroundTransparency = 0.7 }, 0.1) end
+		if b.BackgroundTransparency > 0.5 then
+			tw(b, { BackgroundTransparency = 0.7, TextColor3 = COL.TEXTE }, 0.1)
+		end
 	end)
 	connecter(b.MouseLeave, function()
-		if b.BackgroundTransparency > 0.5 then tw(b, { BackgroundTransparency = 1 }, 0.1) end
+		if b.BackgroundTransparency > 0.5 then
+			tw(b, { BackgroundTransparency = 1, TextColor3 = COL.MUET }, 0.1)
+		end
 	end)
 	connecter(b.Activated, function() selectionner(nom) end)
 	figerTexte(b, "     " .. libelle)
-	onglets[nom] = { bouton = b, barre = barre }
+	onglets[nom] = { bouton = b, barre = barre, contour = contourOnglet }
 end
 do
 local profil = creer("Frame", {
@@ -2564,6 +2653,14 @@ local function section(page, titre)
 		Font = Enum.Font.GothamBlack, TextSize = 11,
 	})
 	l.LayoutOrder = ordre(page)
+	creer("Frame", {
+		Name = "FiletSection", Size = UDim2.new(1, 0, 0, 1), Position = UDim2.fromOffset(0, 21),
+		BackgroundColor3 = Color3.fromRGB(44, 24, 28), BorderSizePixel = 0,
+	}, l)
+	creer("Frame", {
+		Name = "AccentSection", Size = UDim2.fromOffset(28, 2), Position = UDim2.fromOffset(0, 20),
+		BackgroundColor3 = Color3.fromRGB(255, 20, 50), BorderSizePixel = 0,
+	}, l)
 	return l
 end
 local function carte(page, hauteur)
@@ -2576,7 +2673,7 @@ local function carte(page, hauteur)
 	-- clignoter les cartes sous BlueStacks (le survol se déclenche en boucle au défilement).
 	c.BackgroundColor3 = Color3.fromRGB(16, 16, 16)
 	creer("UIStroke", { Thickness = 1, Color = Color3.fromRGB(80, 38, 44), Transparency = 0.3, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, c)
-	creer("Frame", { Size = UDim2.new(0, 2, 1, -30), Position = UDim2.fromOffset(0, 15), BackgroundColor3 = COL.ROUGE, BorderSizePixel = 0 }, c)
+	creer("Frame", { Name = "AccentCarte", Size = UDim2.new(0, 3, 1, -30), Position = UDim2.fromOffset(0, 15), BackgroundColor3 = COL.ROUGE, BorderSizePixel = 0 }, c)
 	return c
 end
 local function creerInterrupteurDans(c, x, y, defaut, rappel)
@@ -2590,9 +2687,24 @@ local function creerInterrupteurDans(c, x, y, defaut, rappel)
 	}, piste)
 	pilule(rond)
 	local etat = defaut
+	local contourPiste = creer("UIStroke", {
+		Thickness = 1, Color = Color3.fromRGB(90, 90, 96), Transparency = 0.5,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+	}, piste)
+	local accentCarte = c:FindFirstChild("AccentCarte")
 	local function afficher()
-		tw(piste, { BackgroundColor3 = etat and COL.ROUGE or Color3.fromRGB(60, 60, 60) }, 0.15)
-		tw(rond, { Position = UDim2.fromOffset(etat and 25 or 3, 3) }, 0.2, Enum.EasingStyle.Back)
+		tw(piste, { BackgroundColor3 = etat and COL.ROUGE or Color3.fromRGB(46, 46, 50) }, 0.18)
+		tw(contourPiste, {
+			Color = etat and Color3.fromRGB(255, 90, 110) or Color3.fromRGB(90, 90, 96),
+			Transparency = etat and 0.25 or 0.5,
+		}, 0.18)
+		tw(rond, {
+			Position = UDim2.fromOffset(etat and 25 or 3, 3),
+			BackgroundColor3 = etat and COL.BLANC or Color3.fromRGB(190, 190, 195),
+		}, 0.22, Enum.EasingStyle.Back)
+		if accentCarte then
+			tw(accentCarte, { BackgroundColor3 = etat and Color3.fromRGB(255, 30, 60) or Color3.fromRGB(62, 46, 50) }, 0.18)
+		end
 	end
 	connecter(piste.Activated, function()
 		etat = not etat
@@ -2735,6 +2847,12 @@ local function optionCurseur(page, nom, description, minimum, maximum, defaut, s
         appliquerValeur(minimum + (maximum - minimum) * rel, true)
     end
     local glisse = false
+    connecter(zone.MouseEnter, function()
+        if not glisse then tw(rond, { Size = UDim2.fromOffset(14, 14) }, 0.1) end
+    end)
+    connecter(zone.MouseLeave, function()
+        if not glisse then tw(rond, { Size = UDim2.fromOffset(12, 12) }, 0.1) end
+    end)
     connecter(zone.InputBegan, function(e)
         if e.UserInputType == Enum.UserInputType.MouseButton1 or e.UserInputType == Enum.UserInputType.Touch then
             glisse = true
@@ -2837,153 +2955,193 @@ local barreC = creer("Frame", {
 }, gui)
 scaleBarre = creer("UIScale", {Scale = 1}, barreC)
 calculerEchelleEcran()
--- Halo rouge statique derrière la barre : effet néon sans animation (rien ne clignote).
-do
-	local couches = { { 12, 0.975 }, { 7, 0.955 }, { 3, 0.92 } }
-	for _, couche in ipairs(couches) do
-		local halo = creer("Frame", {
-			AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
-			Size = UDim2.new(1, couche[1], 1, couche[1]),
-			BackgroundColor3 = Color3.fromRGB(255, 20, 50), BackgroundTransparency = couche[2],
-			BorderSizePixel = 0, Active = false,
-		}, barreC)
-		pilule(halo)
-	end
-end
+-- Barre réduite : reproduction compacte de la maquette validée.
 local barreG = creer("CanvasGroup", {
-	Size = UDim2.fromScale(1, 1),
-	BackgroundColor3 = Color3.fromRGB(0, 0, 0),
-	BackgroundTransparency = 0,
-	BorderSizePixel = 0,
-	GroupTransparency = 1,
+    Name = "SurfaceBarreReduite",
+    Size = UDim2.fromScale(1, 1),
+    BackgroundColor3 = Color3.fromRGB(7, 8, 11),
+    BackgroundTransparency = 0,
+    BorderSizePixel = 0,
+    GroupTransparency = 1,
 }, barreC)
-pilule(barreG)
-do
+coins(barreG, 21)
 creer("UIStroke", {
-	Thickness = 1.5,
-	Color = Color3.fromRGB(205, 42, 62),
-	Transparency = 0.08,
-	ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+    Thickness = 1,
+    Color = Color3.fromRGB(48, 50, 57),
+    Transparency = 0.08,
+    ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 }, barreG)
--- Fond noir uni dès la création : aucun dégradé ne peut apparaître au lancement.
+
+-- Fin liseré supérieur et inférieur, sans barre rouge latérale.
 creer("Frame", {
-	Name = "FondNoirBarreReduite",
-	Size = UDim2.fromScale(1, 1),
-	BackgroundColor3 = Color3.fromRGB(0, 0, 0),
-	BackgroundTransparency = 0,
-	BorderSizePixel = 0,
+    Name = "LiseretHautBarreReduite",
+    Size = UDim2.new(1, -34, 0, 1),
+    Position = UDim2.fromOffset(17, 1),
+    BackgroundColor3 = Color3.fromRGB(65, 67, 74),
+    BackgroundTransparency = 0.55,
+    BorderSizePixel = 0,
 }, barreG)
+
+-- Logo circulaire : symbole blanc, comme demandé.
 local iconeB = creer("Frame", {
-	Size = UDim2.fromOffset(44, 44), Position = UDim2.fromOffset(12, 12),
-	BackgroundColor3 = Color3.fromRGB(255, 255, 255), BorderSizePixel = 0,
+    Name = "LogoCirculaireReduit",
+    Size = UDim2.fromOffset(32, 32),
+    Position = UDim2.fromOffset(5, 5),
+    BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+    BackgroundTransparency = 0,
+    BorderSizePixel = 0,
 }, barreG)
-coins(iconeB, 12)
+pilule(iconeB)
 creer("UIStroke", {
-	Thickness = 2,
-	Color = Color3.fromRGB(255, 45, 72),
-	Transparency = 0,
-	ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+    Thickness = 1.35,
+    Color = Color3.fromRGB(255, 255, 255),
+    Transparency = 0.05,
+    ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 }, iconeB)
 local texteIconeB = texte(iconeB, {
-	Size = UDim2.fromScale(1, 1), Text = "T", Font = Enum.Font.Fantasy, TextSize = 36,
-	TextColor3 = Color3.fromRGB(200, 30, 52), TextXAlignment = Enum.TextXAlignment.Center,
-	TextYAlignment = Enum.TextYAlignment.Center,
-	TextStrokeTransparency = 1,
-	Visible = not LOGO_T_READY,
+    Size = UDim2.fromScale(1, 1),
+    Text = "T",
+    Font = Enum.Font.GothamBlack,
+    TextSize = 23,
+    TextColor3 = Color3.fromRGB(200, 30, 52),
+    TextXAlignment = Enum.TextXAlignment.Center,
+    TextYAlignment = Enum.TextYAlignment.Center,
+    TextStrokeTransparency = 1,
+    Visible = not LOGO_T_READY,
 })
-creer("ImageLabel", {
-	Name = "LogoTImageReduit", Size = UDim2.new(1, -2, 1, -2),
-	Position = UDim2.fromOffset(1, 1), BackgroundTransparency = 1,
-	Image = LOGO_T_IMAGE,
-	ImageColor3 = Color3.fromRGB(255, 255, 255),
-	ImageTransparency = 0,
-	ScaleType = Enum.ScaleType.Fit,
-	Visible = LOGO_T_READY, ZIndex = texteIconeB.ZIndex,
+-- Réutilise exactement l'image du logo chargée dans l'en-tête du menu.
+local logoImageReduit = creer("ImageLabel", {
+    Name = "LogoTImageReduit",
+    Size = UDim2.new(1, -5, 1, -5),
+    Position = UDim2.fromOffset(2.5, 2.5),
+    BackgroundTransparency = 1,
+    Image = LOGO_T_IMAGE,
+    ImageColor3 = Color3.fromRGB(255, 255, 255),
+    ImageTransparency = 0,
+    ScaleType = Enum.ScaleType.Fit,
+    Visible = LOGO_T_READY,
+    ZIndex = texteIconeB.ZIndex,
 }, iconeB)
-local imageIconeB = creer("ImageLabel", {
-	Size = UDim2.new(1, -4, 1, -4), Position = UDim2.fromOffset(2, 2), BackgroundTransparency = 1,
-	ScaleType = Enum.ScaleType.Crop, Visible = false,
-}, iconeB)
-coins(imageIconeB, 10)
-table.insert(imagesIcones, imageIconeB)
-table.insert(textesIcones, texteIconeB)
-if imageSource then afficherImage(imageSource) end
 
--- Contour au premier plan : reste visible même si les calques internes
--- sont rendus différemment par BlueStacks.
-local contourBarreVisible = creer("Frame", {
-	Name = "ContourRougeBarreReduite",
-	Size = UDim2.fromScale(1, 1),
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Active = false,
-	ZIndex = 20,
+-- Séparateur vertical fin, comme sur la maquette.
+creer("Frame", {
+    Name = "SeparateurLogoReduit",
+    Size = UDim2.fromOffset(1, 24),
+    Position = UDim2.fromOffset(46, 9),
+    BackgroundColor3 = Color3.fromRGB(105, 107, 114),
+    BackgroundTransparency = 0.3,
+    BorderSizePixel = 0,
 }, barreG)
-pilule(contourBarreVisible)
-creer("UIStroke", {
-	Thickness = 1,
-	Color = Color3.fromRGB(180, 35, 48),
-	Transparency = 0.18,
-	ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-}, contourBarreVisible)
 
 figerTexte(texte(barreG, {
-	Size = UDim2.fromOffset(170, 23), Position = UDim2.fromOffset(70, 11),
-	Text = "LES TÉNÈBRES", Font = Enum.Font.GothamBlack, TextSize = 17,
-	TextColor3 = Color3.fromRGB(255, 48, 75),
+    Name = "TitreBarreReduite",
+    Size = UDim2.fromOffset(91, 13),
+    Position = UDim2.fromOffset(55, 7),
+    Text = "LES TÉNÈBRES",
+    Font = Enum.Font.GothamBlack,
+    TextSize = 9,
+    TextColor3 = Color3.fromRGB(255, 255, 255),
+    TextXAlignment = Enum.TextXAlignment.Left,
+    TextYAlignment = Enum.TextYAlignment.Center,
 }), "LES TÉNÈBRES")
 figerTexte(texte(barreG, {
-	Size = UDim2.fromOffset(175, 18), Position = UDim2.fromOffset(71, 35),
-	Text = "INTERFACE  •  CLIQUE POUR OUVRIR", Font = Enum.Font.GothamMedium, TextSize = 9,
-	TextColor3 = Color3.fromRGB(190, 190, 198),
-}), "INTERFACE  •  CLIQUE POUR OUVRIR")
+    Name = "SousTitreBarreReduite",
+    Size = UDim2.fromOffset(48, 10),
+    Position = UDim2.fromOffset(55, 22),
+    Text = "CLIQUE POUR",
+    Font = Enum.Font.GothamMedium,
+    TextSize = 6,
+    TextColor3 = Color3.fromRGB(157, 160, 168),
+    TextXAlignment = Enum.TextXAlignment.Left,
+    TextYAlignment = Enum.TextYAlignment.Center,
+}), "CLIQUE POUR")
 figerTexte(texte(barreG, {
-	Size = UDim2.fromOffset(1, 1), Position = UDim2.fromOffset(0, 0),
-	Text = "", TextColor3 = COL.MUET, TextSize = 1, Visible = false,
-}), "")
-creer("Frame", {
-	Size = UDim2.fromOffset(1, 1), Position = UDim2.fromOffset(0, 0),
-	BackgroundColor3 = Color3.fromRGB(70, 30, 36), BorderSizePixel = 0,
-}, barreG)
-end
+    Name = "SousTitreOuvrirBarreReduite",
+    Size = UDim2.fromOffset(36, 10),
+    Position = UDim2.fromOffset(103, 22),
+    Text = "OUVRIR",
+    Font = Enum.Font.GothamBold,
+    TextSize = 6,
+    TextColor3 = Color3.fromRGB(220, 55, 70),
+    TextXAlignment = Enum.TextXAlignment.Left,
+    TextYAlignment = Enum.TextYAlignment.Center,
+}), "OUVRIR")
+
+-- Indicateurs : deux rectangles épurés « FLING » et « CHAMS ».
+-- Éteint : sombre et discret. Actif : vert (liseré, texte, fond teinté).
 local majPuces
 do
-local GRIS_LED = Color3.fromRGB(70, 70, 70)
-local function creerPuce(distanceDroite, nom)
-	local fond = creer("Frame", {
-		Size = UDim2.fromOffset(58, 25), Position = UDim2.fromOffset(BARRE_L - distanceDroite, 21),
-		BackgroundColor3 = Color3.fromRGB(24, 24, 29), BorderSizePixel = 0,
-	}, barreG)
-	pilule(fond)
-	local contour = creer("UIStroke", {
-		Thickness = 1, Color = GRIS_LED, Transparency = 0.18,
-		ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-	}, fond)
-	local point = creer("Frame", {
-		Size = UDim2.fromOffset(7, 7), Position = UDim2.fromOffset(7, 9),
-		BackgroundColor3 = COL.GRIS, BorderSizePixel = 0,
-	}, fond)
-	pilule(point)
-	local etat = texte(fond, {
-		Size = UDim2.fromOffset(38, 18), Position = UDim2.fromOffset(17, 4),
-		Text = nom, Font = Enum.Font.GothamBold, TextSize = 9,
-		TextColor3 = COL.MUET, TextXAlignment = Enum.TextXAlignment.Left,
-	})
-	return point, contour, etat
+local COULEUR_FOND_OFF = Color3.fromRGB(14, 15, 19)
+local COULEUR_FOND_ON = Color3.fromRGB(10, 44, 24)
+local COULEUR_TEXTE_OFF = Color3.fromRGB(120, 123, 132)
+local COULEUR_TEXTE_ON = Color3.fromRGB(60, 240, 120)
+local COULEUR_LISERE_OFF = Color3.fromRGB(52, 54, 61)
+local COULEUR_LISERE_ON = Color3.fromRGB(45, 235, 105)
+local function creerIndicateur(x, nom)
+    local rectangle = creer("Frame", {
+        Name = "Indicateur" .. nom,
+        Size = UDim2.fromOffset(38, 22),
+        Position = UDim2.fromOffset(x, 10),
+        BackgroundColor3 = COULEUR_FOND_OFF,
+        BackgroundTransparency = 0,
+        BorderSizePixel = 0,
+    }, barreG)
+    coins(rectangle, 6)
+    local contour = creer("UIStroke", {
+        Thickness = 1,
+        Color = COULEUR_LISERE_OFF,
+        Transparency = 0.05,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+    }, rectangle)
+    local libelle = texte(rectangle, {
+        Name = "Libelle" .. nom,
+        Size = UDim2.fromScale(1, 1),
+        Text = nom,
+        Font = Enum.Font.GothamBlack,
+        TextSize = 8,
+        TextColor3 = COULEUR_TEXTE_OFF,
+        TextXAlignment = Enum.TextXAlignment.Center,
+        TextYAlignment = Enum.TextYAlignment.Center,
+        TextStrokeTransparency = 1,
+    })
+    return rectangle, contour, libelle
 end
-local function appliquerPuce(point, contour, etat, allume)
-	tw(point, { BackgroundColor3 = allume and COL.VERT or COL.GRIS }, 0.2)
-	tw(contour, { Color = allume and COL.VERT or GRIS_LED }, 0.2)
-	etat.TextColor3 = allume and COL.VERT or COL.MUET
+local rectFling, contourFling, labelFling = creerIndicateur(151, "FLING")
+local rectChams, contourChams, labelChams = creerIndicateur(194, "CHAMS")
+local etatPrecedent = {}
+local function appliquerIndicateur(rectangle, contour, libelle, allume)
+    allume = allume == true
+    if etatPrecedent[rectangle] == allume then return end
+    etatPrecedent[rectangle] = allume
+    tw(rectangle, { BackgroundColor3 = allume and COULEUR_FOND_ON or COULEUR_FOND_OFF }, 0.22)
+    if allume then contour.Thickness = 2.4 end
+    tw(contour, {
+        Color = allume and COULEUR_LISERE_ON or COULEUR_LISERE_OFF,
+        Thickness = allume and 1.3 or 1,
+    }, 0.38, Enum.EasingStyle.Quint)
+    tw(libelle, { TextColor3 = allume and COULEUR_TEXTE_ON or COULEUR_TEXTE_OFF }, 0.22)
 end
 function majPuces()
-	appliquerPuce(puceFling, contourFling, etatFling, actif)
-	appliquerPuce(puceChams, contourChams, etatChams, rolesActifs)
+    appliquerIndicateur(rectFling, contourFling, labelFling, actif)
+    appliquerIndicateur(rectChams, contourChams, labelChams, rolesActifs)
 end
 end
+
 local barreHit = creer("Frame", {
 	Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Active = true, ZIndex = 5,
 }, barreG)
+do
+	local contourBarre = barreG:FindFirstChildOfClass("UIStroke")
+	local texteOuvrir = barreG:FindFirstChild("SousTitreOuvrirBarreReduite")
+	connecter(barreHit.MouseEnter, function()
+		if contourBarre then tw(contourBarre, { Color = Color3.fromRGB(226, 48, 72), Transparency = 0 }, 0.18) end
+		if texteOuvrir then tw(texteOuvrir, { TextColor3 = Color3.fromRGB(255, 255, 255) }, 0.18) end
+	end)
+	connecter(barreHit.MouseLeave, function()
+		if contourBarre then tw(contourBarre, { Color = Color3.fromRGB(48, 50, 57), Transparency = 0.08 }, 0.25) end
+		if texteOuvrir then tw(texteOuvrir, { TextColor3 = Color3.fromRGB(220, 55, 70) }, 0.25) end
+	end)
+end
 local fpsLabel = texte(gui, {
 	Size = UDim2.fromOffset(240, 18), Position = UDim2.fromOffset(12, 10),
 	TextColor3 = COL.VERT, Font = Enum.Font.GothamBold, TextSize = 12, Visible = false,
@@ -3495,7 +3653,6 @@ interrupteur(pages["Visuel"], "Chams", "Murder rouge, Sheriff bleu, Héros jaune
 	if not v then
 		for p in pairs(halos) do retirerHalo(p) end
 		for p in pairs(boites) do retirerBoite(p) end
-		for p in pairs(etiquettes) do retirerEtiquette(p) end
 	end
 end)
 interrupteur(pages["Visuel"], "Chams arme tombée", "Affiche l'arme tombée en jaune clair", false, function(v)
@@ -6522,7 +6679,7 @@ local function installerGun()
         end
         derniereRecherche = maintenant
         armeCache = nil
-        local objet = workspace:FindFirstChild("GunDrop", true)
+        local objet = flyControl.trouverGunDrop()
         if not objet then return nil end
         if objet:IsA("BasePart") then
             armeCache = objet
@@ -6823,9 +6980,10 @@ local function majEtat()
 			if not reduit then barreC.Visible = false end
 		end)
 	else
-		-- Appliquer l'état final avant d'afficher la barre : aucun flash rouge/transitoire.
-		barreG.GroupTransparency = 0
+		-- Le tween remplace (annule) tout fondu de masquage encore en cours :
+		-- un clic rapide ne peut plus laisser la barre réduite invisible.
 		barreC.Visible = true
+		tw(barreG, { GroupTransparency = 0 }, 0.1)
 		connecterFinTween(tw(cadre, { GroupTransparency = 1 }, 0.18), function()
 			if reduit then conteneur.Visible = false end
 		end)
