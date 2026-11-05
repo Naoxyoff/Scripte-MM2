@@ -6603,11 +6603,39 @@ end)
 end
 selectionner("Combat")
 local reduit = false
-local function poserBarreEnHaut()
+local function sauvegarderPositionBarre()
+    pcall(function()
+        if type(writefile) ~= "function" then return end
+        local pos = barreC.Position
+        configRuntime.barreReduitePosition = {
+            xScale = pos.X.Scale, xOffset = pos.X.Offset,
+            yScale = pos.Y.Scale, yOffset = pos.Y.Offset,
+        }
+        -- Écrit la position dans le même fichier que les autres préférences,
+        -- sans écraser les réglages déjà enregistrés.
+        local donnees = {}
+        for k, v in pairs(configChargee) do donnees[k] = v end
+        for k, v in pairs(configRuntime) do donnees[k] = v end
+        donnees.version = 5
+        writefile(NOM_CONFIG, game:GetService("HttpService"):JSONEncode(donnees))
+        configChargee = donnees
+    end)
+end
 
-	if barreC:GetAttribute("posee") then return end
-	barreC:SetAttribute("posee", true)
-	barreC.Position = UDim2.new(0, 25 + BARRE_L / 2, 0.343, 0)
+local function poserBarreEnHaut()
+    if barreC:GetAttribute("posee") then return end
+    barreC:SetAttribute("posee", true)
+    local positionSauvee = valeurConfig("barreReduitePosition", {})
+    if type(positionSauvee) == "table"
+        and tonumber(positionSauvee.xScale) and tonumber(positionSauvee.xOffset)
+        and tonumber(positionSauvee.yScale) and tonumber(positionSauvee.yOffset) then
+        barreC.Position = UDim2.new(
+            tonumber(positionSauvee.xScale), tonumber(positionSauvee.xOffset),
+            tonumber(positionSauvee.yScale), tonumber(positionSauvee.yOffset)
+        )
+    else
+        barreC.Position = UDim2.new(0, 25 + BARRE_L / 2, 0.343, 0)
+    end
 end
 local function connecterFinTween(tween, rappel)
 	local connexion
@@ -6645,6 +6673,9 @@ local function rendreDeplacable(poignee, cible, surClic)
             local finConnexion
             finConnexion = connecter(e.Changed, function()
                 if e.UserInputState == Enum.UserInputState.End then
+                    if glisse and bouge and cible == barreC then
+                        sauvegarderPositionBarre()
+                    end
                     if glisse and not bouge and surClic then surClic() end
                     glisse = false
                     deconnecter(finConnexion)
