@@ -2159,7 +2159,7 @@ connecter(gui.DescendantAdded, function(o)
 end)
 local echelleInterface = valeurConfig("echelleInterface", 100)
 -- Dimensions de reference de la barre reduite (identiques sur PC et emulateur).
-local BARRE_L, BARRE_H = 340, 54
+local BARRE_L, BARRE_H = 370, 60
 local scaleFenetre = creer("UIScale", {Scale = 1}, nil)
 local scaleBarre = nil
 local appliquerHUD = nil
@@ -2837,6 +2837,19 @@ local barreC = creer("Frame", {
 }, gui)
 scaleBarre = creer("UIScale", {Scale = 1}, barreC)
 calculerEchelleEcran()
+-- Halo rouge statique derrière la barre : effet néon sans animation (rien ne clignote).
+do
+	local couches = { { 14, 0.93 }, { 10, 0.86 }, { 6, 0.76 } }
+	for _, couche in ipairs(couches) do
+		local halo = creer("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.new(1, couche[1], 1, couche[1]),
+			BackgroundColor3 = Color3.fromRGB(255, 20, 50), BackgroundTransparency = couche[2],
+			BorderSizePixel = 0, Active = false,
+		}, barreC)
+		pilule(halo)
+	end
+end
 local barreG = creer("CanvasGroup", {
 	Size = UDim2.fromScale(1, 1),
 	BackgroundColor3 = Color3.fromRGB(0, 0, 0),
@@ -2846,14 +2859,14 @@ local barreG = creer("CanvasGroup", {
 }, barreC)
 pilule(barreG)
 do
-local contourBarre = creer("UIStroke", {
+creer("UIStroke", {
 	Thickness = 2,
-	Color = Color3.fromRGB(220, 38, 55),
+	Color = Color3.fromRGB(255, 20, 50),
 	Transparency = 0,
 	ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 }, barreG)
--- Fond noir uni dès la création : aucun dégradé rouge ne peut apparaître au lancement.
-local voileBarre = creer("Frame", {
+-- Fond noir uni dès la création : aucun dégradé ne peut apparaître au lancement.
+creer("Frame", {
 	Name = "FondNoirBarreReduite",
 	Size = UDim2.fromScale(1, 1),
 	BackgroundColor3 = Color3.fromRGB(0, 0, 0),
@@ -2861,45 +2874,37 @@ local voileBarre = creer("Frame", {
 	BorderSizePixel = 0,
 }, barreG)
 local iconeB = creer("Frame", {
-	Size = UDim2.fromOffset(36, 36), Position = UDim2.fromOffset(10, 9), BackgroundColor3 = COL.VIOLET,
+	Size = UDim2.fromOffset(40, 40), Position = UDim2.fromOffset(10, 10),
+	BackgroundColor3 = Color3.fromRGB(255, 255, 255), BorderSizePixel = 0,
 }, barreG)
-coins(iconeB, 11)
-iconeB.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+coins(iconeB, 12)
 creer("UIStroke", {
-	Thickness = 1.25,
-	Color = Color3.fromRGB(255, 255, 255),
+	Thickness = 2,
+	Color = Color3.fromRGB(255, 20, 50),
 	Transparency = 0,
 	ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 }, iconeB)
 local texteIconeB = texte(iconeB, {
-	Size = UDim2.fromScale(1, 1), Text = "T", Font = Enum.Font.Fantasy, TextSize = 23,
+	Size = UDim2.fromScale(1, 1), Text = "T", Font = Enum.Font.Fantasy, TextSize = 26,
 	TextColor3 = Color3.fromRGB(200, 30, 52), TextXAlignment = Enum.TextXAlignment.Center,
 	TextYAlignment = Enum.TextYAlignment.Center,
 	TextStrokeTransparency = 1,
-    Visible = not LOGO_T_READY,
+	Visible = not LOGO_T_READY,
 })
-local logoImageReduit = creer("ImageLabel", {
-    Name = "LogoTImageReduit", Size = UDim2.new(1, -2, 1, -2),
-    Position = UDim2.fromOffset(1, 1), BackgroundTransparency = 1,
-    Image = LOGO_T_IMAGE,
-    ImageColor3 = Color3.fromRGB(255, 255, 255),
-    ImageTransparency = 0,
-    ScaleType = Enum.ScaleType.Fit,
-    Visible = LOGO_T_READY, ZIndex = texteIconeB.ZIndex,
+creer("ImageLabel", {
+	Name = "LogoTImageReduit", Size = UDim2.new(1, -2, 1, -2),
+	Position = UDim2.fromOffset(1, 1), BackgroundTransparency = 1,
+	Image = LOGO_T_IMAGE,
+	ImageColor3 = Color3.fromRGB(255, 255, 255),
+	ImageTransparency = 0,
+	ScaleType = Enum.ScaleType.Fit,
+	Visible = LOGO_T_READY, ZIndex = texteIconeB.ZIndex,
 }, iconeB)
-creer("UIGradient", {
-	Rotation = 90,
-	Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, Color3.fromRGB(250, 246, 255)),
-		ColorSequenceKeypoint.new(0.48, Color3.fromRGB(255, 120, 135)),
-		ColorSequenceKeypoint.new(1, Color3.fromRGB(110, 28, 42)),
-	}),
-}, texteIconeB)
 local imageIconeB = creer("ImageLabel", {
 	Size = UDim2.new(1, -4, 1, -4), Position = UDim2.fromOffset(2, 2), BackgroundTransparency = 1,
 	ScaleType = Enum.ScaleType.Crop, Visible = false,
 }, iconeB)
-coins(imageIconeB, 9)
+coins(imageIconeB, 10)
 table.insert(imagesIcones, imageIconeB)
 table.insert(textesIcones, texteIconeB)
 if imageSource then afficherImage(imageSource) end
@@ -2917,46 +2922,65 @@ local contourBarreVisible = creer("Frame", {
 pilule(contourBarreVisible)
 creer("UIStroke", {
 	Thickness = 2,
-	Color = Color3.fromRGB(220, 38, 55),
+	Color = Color3.fromRGB(255, 20, 50),
 	Transparency = 0,
 	ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 }, contourBarreVisible)
 
 figerTexte(texte(barreG, {
-	Size = UDim2.fromOffset(126, 18), Position = UDim2.fromOffset(56, 9),
-	Text = "LES TÉNÈBRES", Font = Enum.Font.GothamBlack, TextSize = 13, TextColor3 = Color3.fromRGB(255, 255, 255),
-}), "LES TÉNÈBRES")
+	Size = UDim2.fromOffset(60, 10), Position = UDim2.fromOffset(64, 8),
+	Text = "LES", Font = Enum.Font.GothamBold, TextSize = 9,
+	TextColor3 = Color3.fromRGB(255, 20, 50),
+}), "LES")
 figerTexte(texte(barreG, {
-	Size = UDim2.fromOffset(126, 14), Position = UDim2.fromOffset(56, 29),
-	Text = "Clique pour ouvrir", TextColor3 = COL.MUET, TextSize = 10,
+	Size = UDim2.fromOffset(126, 22), Position = UDim2.fromOffset(63, 17),
+	Text = "TÉNÈBRES", Font = Enum.Font.GothamBlack, TextSize = 18,
+	TextColor3 = Color3.fromRGB(255, 255, 255),
+}), "TÉNÈBRES")
+figerTexte(texte(barreG, {
+	Size = UDim2.fromOffset(126, 12), Position = UDim2.fromOffset(64, 40),
+	Text = "Clique pour ouvrir", TextColor3 = COL.MUET, TextSize = 9,
 }), "Clique pour ouvrir")
+creer("Frame", {
+	Size = UDim2.fromOffset(1, 30), Position = UDim2.fromOffset(BARRE_L - 176, 15),
+	BackgroundColor3 = Color3.fromRGB(70, 30, 36), BorderSizePixel = 0,
+}, barreG)
 end
 local majPuces
 do
+local GRIS_LED = Color3.fromRGB(70, 70, 70)
 local function creerPuce(distanceDroite, nom)
 	local fond = creer("Frame", {
-		Size = UDim2.fromOffset(68, 26), Position = UDim2.fromOffset(BARRE_L - distanceDroite, 14),
-		BackgroundColor3 = Color3.fromRGB(20, 20, 20), BorderSizePixel = 0,
+		Size = UDim2.fromOffset(76, 34), Position = UDim2.fromOffset(BARRE_L - distanceDroite, 13),
+		BackgroundColor3 = Color3.fromRGB(16, 16, 16), BorderSizePixel = 0,
 	}, barreG)
-	pilule(fond)
-	local contourPuce = creer("UIStroke", { Thickness = 1, Color = Color3.fromRGB(70, 70, 70), ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, fond)
+	coins(fond, 10)
+	local contour = creer("UIStroke", { Thickness = 1, Color = GRIS_LED, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, fond)
 	local point = creer("Frame", {
-		Size = UDim2.fromOffset(8, 8), Position = UDim2.fromOffset(11, 9), BackgroundColor3 = COL.GRIS, BorderSizePixel = 0,
+		Size = UDim2.fromOffset(10, 10), Position = UDim2.fromOffset(10, 12), BackgroundColor3 = COL.GRIS, BorderSizePixel = 0,
 	}, fond)
 	pilule(point)
 	texte(fond, {
-		Size = UDim2.new(1, -26, 1, 0), Position = UDim2.fromOffset(26, 0),
+		Size = UDim2.fromOffset(46, 14), Position = UDim2.fromOffset(26, 5),
 		Text = nom, Font = Enum.Font.GothamBold, TextSize = 10, TextColor3 = COL.TEXTE,
 	})
-	return point, contourPuce
+	local etat = texte(fond, {
+		Size = UDim2.fromOffset(46, 11), Position = UDim2.fromOffset(26, 19),
+		Text = "INACTIF", Font = Enum.Font.GothamBold, TextSize = 8, TextColor3 = COL.MUET,
+	})
+	return point, contour, etat
 end
-local puceFling, contourFling = creerPuce(154, "FLING")
-local puceChams, contourChams = creerPuce(80, "CHAMS")
+local puceFling, contourFling, etatFling = creerPuce(170, "FLING")
+local puceChams, contourChams, etatChams = creerPuce(88, "CHAMS")
+local function appliquerPuce(point, contour, etat, allume)
+	tw(point, { BackgroundColor3 = allume and COL.VERT or COL.GRIS }, 0.2)
+	tw(contour, { Color = allume and COL.VERT or GRIS_LED }, 0.2)
+	etat.Text = allume and "ACTIF" or "INACTIF"
+	etat.TextColor3 = allume and COL.VERT or COL.MUET
+end
 function majPuces()
-	tw(puceFling, { BackgroundColor3 = actif and COL.VERT or COL.GRIS }, 0.2)
-	tw(puceChams, { BackgroundColor3 = rolesActifs and COL.VERT or COL.GRIS }, 0.2)
-	tw(contourFling, { Color = actif and COL.VERT or Color3.fromRGB(70, 70, 70) }, 0.2)
-	tw(contourChams, { Color = rolesActifs and COL.VERT or Color3.fromRGB(70, 70, 70) }, 0.2)
+	appliquerPuce(puceFling, contourFling, etatFling, actif)
+	appliquerPuce(puceChams, contourChams, etatChams, rolesActifs)
 end
 end
 local barreHit = creer("Frame", {
