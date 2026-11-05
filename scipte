@@ -1,26 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -2091,6 +2068,8 @@ connecter(gui.DescendantAdded, function(o)
 	if o:IsA("TextLabel") or o:IsA("TextButton") or o:IsA("TextBox") then pcall(function() o.AutoLocalize = false end) end
 end)
 local echelleInterface = valeurConfig("echelleInterface", 100)
+-- Dimensions de reference de la barre reduite (identiques sur PC et emulateur).
+local BARRE_L, BARRE_H = 310, 46
 local scaleFenetre = creer("UIScale", {Scale = 1}, nil)
 local scaleBarre = nil
 local appliquerHUD = nil
@@ -2101,10 +2080,22 @@ local function calculerEchelleEcran()
     local viewport = camera.ViewportSize
     local largeurCible = (conteneur and conteneur.Size.X.Offset > 0) and conteneur.Size.X.Offset or LARGEUR
     local hauteurCible = (conteneur and conteneur.Size.Y.Offset > 0) and conteneur.Size.Y.Offset or HAUTEUR
+    -- La grande fenetre garde son adaptation propre.
     local auto = math.min(1, (viewport.X - 28) / (largeurCible + 20), (viewport.Y - 28) / (hauteurCible + 20))
     auto = math.clamp(auto, 0.58, 1)
     scaleFenetre.Scale = auto * (echelleInterface / 100)
-    if scaleBarre then scaleBarre.Scale = auto * (echelleInterface / 100) end
+
+    -- IMPORTANT : ne jamais reutiliser l'echelle de la grande fenetre pour
+    -- la barre reduite. Sur BlueStacks, cela la rendait minuscule et floue.
+    if scaleBarre then
+        local echelleBarre = math.min(
+            1,
+            (viewport.X - 28) / (BARRE_L + 20),
+            (viewport.Y - 28) / (BARRE_H + 20)
+        )
+        echelleBarre = math.clamp(echelleBarre, 0.5, 1)
+        scaleBarre.Scale = echelleBarre
+    end
 end
 conteneur = creer("Frame", {
 	Size = UDim2.fromOffset(LARGEUR, HAUTEUR),
@@ -2130,7 +2121,7 @@ connecter(workspace:GetPropertyChangedSignal("CurrentCamera"), function()
     task.defer(function() if appliquerHUD then appliquerHUD() end end)
 end)
 local cadre = creer("CanvasGroup", {
-	Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.fromRGB(12, 13, 18), BorderSizePixel = 0, GroupTransparency = 1,
+	Size = UDim2.fromScale(1, 1), BackgroundColor3 = COL.FOND, BorderSizePixel = 0, GroupTransparency = 1,
 }, conteneur)
 coins(cadre, 16)
 local poigneeRedimensionnement = creer("TextButton", {
@@ -2772,7 +2763,6 @@ local function carteBouton(page, nom, description, libelle, couleur, action)
 	connecter(b.MouseLeave, function() tw(b, { BackgroundTransparency = 0 }, 0.12) end)
 	connecter(b.Activated, action)
 end
-local BARRE_L, BARRE_H = 310, 46
 local barreC = creer("Frame", {
 	Size = UDim2.fromOffset(BARRE_L, BARRE_H), AnchorPoint = Vector2.new(0.5, 0.5),
 	Position = UDim2.fromScale(0.5, 0.5), BackgroundTransparency = 1, Visible = false,
@@ -2790,13 +2780,10 @@ local contourBarre = creer("UIStroke", {
 creer("UIGradient", {
 	Color = ColorSequence.new(Color3.fromRGB(220, 38, 55), Color3.fromRGB(42, 25, 29)),
 }, contourBarre)
--- Fond uni sombre : évite le rendu blanc des UIGradient sur certains émulateurs.
-local voileBarre = creer("Frame", {
-	Size = UDim2.fromScale(1, 1),
-	BackgroundColor3 = Color3.fromRGB(12, 13, 18),
-	BackgroundTransparency = 0,
-	BorderSizePixel = 0,
-}, barreG)
+local voileBarre = creer("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = COL.BLANC, BorderSizePixel = 0 }, barreG)
+creer("UIGradient", {
+	Color = ColorSequence.new(Color3.fromRGB(30, 15, 18), Color3.fromRGB(9, 10, 12)),
+}, voileBarre)
 local iconeB = creer("Frame", {
 	Size = UDim2.fromOffset(32, 32), Position = UDim2.fromOffset(9, 7), BackgroundColor3 = COL.VIOLET,
 }, barreG)
