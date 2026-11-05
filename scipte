@@ -2173,7 +2173,7 @@ local function calculerEchelleEcran()
     -- La grande fenetre garde son adaptation propre.
     local auto = math.min(1, (viewport.X - 28) / (largeurCible + 20), (viewport.Y - 28) / (hauteurCible + 20))
     auto = math.clamp(auto, 0.58, 1)
-    scaleFenetre.Scale = auto * (echelleInterface / 100)
+    scaleFenetre.Scale = math.floor(auto * (echelleInterface / 100) * 20 + 0.5) / 20
 
     -- IMPORTANT : ne jamais reutiliser l'echelle de la grande fenetre pour
     -- la barre reduite. Sur BlueStacks, cela la rendait minuscule et floue.
@@ -2220,8 +2220,8 @@ connecter(workspace:GetPropertyChangedSignal("CurrentCamera"), function()
     connecterAdaptationEcran()
     task.defer(function() if appliquerHUD then appliquerHUD() end end)
 end)
-local cadre = creer("CanvasGroup", {
-	Size = UDim2.fromScale(1, 1), BackgroundColor3 = COL.FOND, BorderSizePixel = 0, GroupTransparency = 1,
+local cadre = creer("Frame", {
+	Size = UDim2.fromScale(1, 1), BackgroundColor3 = COL.FOND, BorderSizePixel = 0, ClipsDescendants = true,
 }, conteneur)
 coins(cadre, 16)
 local poigneeRedimensionnement = creer("TextButton", {
