@@ -2094,8 +2094,29 @@ end
 local function pilule(o)
 	return creer("UICorner", { CornerRadius = UDim.new(0.5, 0) }, o)
 end
+-- Un seul tween actif par objet : un nouvel état remplace proprement l'ancien.
+-- Les clés faibles évitent de retenir les composants détruits.
+local tweensActifs = setmetatable({}, { __mode = "k" })
 local function tw(o, props, t, style)
-	local anim = TweenService:Create(o, TweenInfo.new(t or 0.18, style or Enum.EasingStyle.Quad, Enum.EasingDirection.Out), props)
+	if not o then return nil end
+	local ancien = tweensActifs[o]
+	if ancien then
+		pcall(function() ancien:Cancel() end)
+	end
+	local ok, anim = pcall(function()
+		return TweenService:Create(
+			o,
+			TweenInfo.new(t or 0.18, style or Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+			props
+		)
+	end)
+	if not ok or not anim then return nil end
+	tweensActifs[o] = anim
+	anim.Completed:Connect(function()
+		if tweensActifs[o] == anim then
+			tweensActifs[o] = nil
+		end
+	end)
 	anim:Play()
 	return anim
 end
@@ -2174,14 +2195,24 @@ conteneur = creer("Frame", {
 	Visible = false,
 }, gui)
 scaleFenetre.Parent = conteneur
+local connexionViewportCamera = nil
+local cameraViewportSuivie = nil
 local function connecterAdaptationEcran()
+    if connexionViewportCamera then
+        deconnecter(connexionViewportCamera)
+        connexionViewportCamera = nil
+    end
+    cameraViewportSuivie = workspace.CurrentCamera
     calculerEchelleEcran()
-    local camera = workspace.CurrentCamera
-    if camera then
-        connecter(camera:GetPropertyChangedSignal("ViewportSize"), function()
-            calculerEchelleEcran()
-            if appliquerHUD then appliquerHUD() end
-        end)
+    if cameraViewportSuivie then
+        connexionViewportCamera = connecter(
+            cameraViewportSuivie:GetPropertyChangedSignal("ViewportSize"),
+            function()
+                if workspace.CurrentCamera ~= cameraViewportSuivie then return end
+                calculerEchelleEcran()
+                if appliquerHUD then appliquerHUD() end
+            end
+        )
     end
 end
 connecterAdaptationEcran()
@@ -2217,7 +2248,11 @@ creer("UIGradient", {
 		ColorSequenceKeypoint.new(1, Color3.fromRGB(34, 35, 43)),
 	}),
 }, contourFenetre)
-local voile = creer("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = COL.BLANC, BorderSizePixel = 0 }, cadre)
+local voile = creer("Frame", {
+	Size = UDim2.fromScale(1, 1),
+	BackgroundColor3 = Color3.fromRGB(22, 12, 15),
+	BorderSizePixel = 0,
+}, cadre)
 creer("UIGradient", {
 	Rotation = 90,
 	Color = ColorSequence.new({
@@ -2419,7 +2454,8 @@ connecter(boutonReduire.Activated, function()
 end)
 local ligneEntete = creer("Frame", {
 	Size = UDim2.new(1, 0, 0, 1), Position = UDim2.fromOffset(0, HAUT_ENTETE),
-	BackgroundColor3 = COL.BLANC, BorderSizePixel = 0,
+	-- Couleur de secours sombre : le gradient ne doit jamais révéler un pixel blanc au montage.
+	BackgroundColor3 = Color3.fromRGB(75, 30, 35), BorderSizePixel = 0,
 }, cadre)
 creer("UIGradient", {
 	Color = ColorSequence.new({
@@ -2717,7 +2753,7 @@ local function optionCurseur(page, nom, description, minimum, maximum, defaut, s
         Size = UDim2.new(1, -136, 0, 28), Position = UDim2.fromOffset(22, 53),
         BackgroundTransparency = 1, Text = "", AutoButtonColor = false,
     }, c)
-    local valeurActuelle = defaut
+    local valeurActuelle = nil
     local function placer(valeur)
         local rel = math.clamp((valeur - minimum) / math.max(maximum - minimum, 0.000001), 0, 1)
         rempli.Size = UDim2.new(rel, 0, 1, 0)
@@ -2725,6 +2761,11 @@ local function optionCurseur(page, nom, description, minimum, maximum, defaut, s
     end
     local function appliquerValeur(valeur, sauvegarder)
         valeur = bornerValeurCurseur(valeur, minimum, maximum)
+        if valeurActuelle == valeur then
+            valeurLabel.Text = formaterValeurCurseur(valeur, suffixe)
+            if sauvegarder then enregistrerConfig(cleValeur, valeur) end
+            return
+        end
         valeurActuelle = valeur
         placer(valeur)
         valeurLabel.Text = formaterValeurCurseur(valeur, suffixe)
@@ -4342,7 +4383,7 @@ local function curseurVert(nom, note, minimum, maximum, defaut, rappel)
 	pilule(rond)
 	creer("UIGradient", { Color = ColorSequence.new(COL.ROUGE, COL.ORCHIDEE) }, rempli)
     local zone = creer("TextButton", { Size = UDim2.new(1, -32, 0, 24), Position = UDim2.fromOffset(16, 48), BackgroundTransparency = 1, Text = "", AutoButtonColor = false }, c)
-    local valeurActuelle = defaut
+    local valeurActuelle = nil
     local function placer(valeur)
         local rel = math.clamp((valeur - minimum) / math.max(maximum - minimum, 0.000001), 0, 1)
         rempli.Size = UDim2.new(rel, 0, 1, 0)
@@ -4350,6 +4391,11 @@ local function curseurVert(nom, note, minimum, maximum, defaut, rappel)
     end
     local function appliquerValeur(valeur, sauvegarder)
         valeur = bornerValeurCurseur(valeur, minimum, maximum)
+        if valeurActuelle == valeur then
+            valeurLabel.Text = formaterValeurCurseur(valeur, "")
+            if sauvegarder then enregistrerConfig(cle, valeur) end
+            return
+        end
         valeurActuelle = valeur
         placer(valeur)
         valeurLabel.Text = formaterValeurCurseur(valeur, "")
@@ -6787,10 +6833,13 @@ local function poserBarreEnHaut()
     end
 end
 local function connecterFinTween(tween, rappel)
+	if not tween then return end
 	local connexion
-	connexion = connecter(tween.Completed, function()
+	connexion = connecter(tween.Completed, function(etatLecture)
 		deconnecter(connexion)
-		if not fermee then rappel() end
+		if etatLecture == Enum.PlaybackState.Completed and not fermee then
+			rappel()
+		end
 	end)
 end
 local function majEtat()
@@ -6887,6 +6936,7 @@ end)
 	conteneur.Visible = false
 	cadre.GroupTransparency = 1
 
+	local introAnnulee = false
 	local ok = pcall(function()
 		local ROUGE = Color3.fromRGB(255, 35, 68)
 		local ROUGE_CLAIR = Color3.fromRGB(255, 105, 125)
@@ -6920,6 +6970,7 @@ end)
 			ZIndex = 890,
 		})
 		local fondRouge = frame(gui, {
+			Name = "TenebresLoadingGlow",
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.fromScale(0.5, 0.48),
 			Size = UDim2.fromScale(0.9, 0.9),
@@ -7184,38 +7235,49 @@ end)
 		tw(scene, {GroupTransparency = 0, Size = UDim2.new(0.9, 0, 0, 390)}, 0.8, Enum.EasingStyle.Back)
 		tw(voile, {BackgroundTransparency = 0.12}, 0.7, Enum.EasingStyle.Sine)
 		tw(fondRouge, {BackgroundTransparency = 0.78}, 1.4, Enum.EasingStyle.Sine)
-		tw(haloEmbleme, {Size = UDim2.fromOffset(132, 132)}, 1.1, Enum.EasingStyle.Quad)
+		local tweenHaloIntro = tw(haloEmbleme, {Size = UDim2.fromOffset(132, 132)}, 1.1, Enum.EasingStyle.Quad)
 		for _, p in ipairs(poussiere) do
 			task.spawn(function()
-				while not fini and not fermee and p.Parent do
+				while not fini and not introAnnulee and not fermee and p.Parent do
 					local duree = 2.5 + math.random() * 3
 					local x = math.random()
 					p.Position = UDim2.fromScale(x, 1.04)
 					p.BackgroundTransparency = 0.2 + math.random() * 0.4
-					tw(p, {
+					local tween = tw(p, {
 						Position = UDim2.fromScale(math.clamp(x + (math.random() - 0.5) * 0.18, 0, 1), -0.05),
 						BackgroundTransparency = 1,
 					}, duree, Enum.EasingStyle.Sine)
-					task.wait(duree)
+					if tween then tween.Completed:Wait() else task.wait(duree) end
+					if not fini and not introAnnulee and not fermee then task.wait(0.02) end
 				end
 			end)
 		end
+		-- Chaque anneau possède sa propre cadence : aucune nouvelle rotation
+		-- n'est lancée avant la fin de la précédente sur le même objet.
+		local function animerRotation(objet, sens, duree)
+			task.spawn(function()
+				while not fini and not introAnnulee and not fermee and objet and objet.Parent do
+					local tween = tw(objet, { Rotation = objet.Rotation + 360 * sens }, duree, Enum.EasingStyle.Linear)
+					if not tween then break end
+					tween.Completed:Wait()
+					if not fini and not introAnnulee and not fermee then task.wait(0.02) end
+				end
+			end)
+		end
+		animerRotation(anneau1, 1, 8)
+		animerRotation(anneau2, -1, 13)
+		animerRotation(anneau3, 1, 19)
+		animerRotation(anneauAccent, 1, 24)
 		task.spawn(function()
-			while not fini and not fermee do
-				tw(anneau1, {Rotation = anneau1.Rotation + 360}, 8, Enum.EasingStyle.Linear)
-				tw(anneau2, {Rotation = anneau2.Rotation - 360}, 13, Enum.EasingStyle.Linear)
-				tw(anneau3, {Rotation = anneau3.Rotation + 360}, 19, Enum.EasingStyle.Linear)
-				tw(anneauAccent, {Rotation = anneauAccent.Rotation + 360}, 24, Enum.EasingStyle.Linear)
-				task.wait(8)
-			end
-		end)
-		task.spawn(function()
-			while not fini and not fermee do
-				tw(haloEmbleme, {Size = UDim2.fromOffset(120, 120)}, 1.1, Enum.EasingStyle.Sine)
-				task.wait(1.1)
-				if fini then break end
-				tw(haloEmbleme, {Size = UDim2.fromOffset(138, 138)}, 1.1, Enum.EasingStyle.Sine)
-				task.wait(1.1)
+			if tweenHaloIntro then tweenHaloIntro.Completed:Wait() end
+			while not fini and not introAnnulee and not fermee and haloEmbleme.Parent do
+				local reduction = tw(haloEmbleme, {Size = UDim2.fromOffset(120, 120)}, 1.1, Enum.EasingStyle.Sine)
+				if not reduction then break end
+				reduction.Completed:Wait()
+				if fini or fermee then break end
+				local agrandissement = tw(haloEmbleme, {Size = UDim2.fromOffset(138, 138)}, 1.1, Enum.EasingStyle.Sine)
+				if not agrandissement then break end
+				agrandissement.Completed:Wait()
 			end
 		end)
 
@@ -7258,7 +7320,12 @@ end)
 	end)
 
 	if not ok then
+		introAnnulee = true
 		pcall(function()
+			for _, nom in ipairs({"TenebresLoadingScene", "TenebresLoadingGlow", "TenebresLoadingCinematic"}) do
+				local objet = gui:FindFirstChild(nom)
+				if objet then objet:Destroy() end
+			end
 			if not reduit then conteneur.Visible = true end
 			tw(cadre, {GroupTransparency = (100 - opaciteFenetre) / 100}, 0.4)
 		end)
