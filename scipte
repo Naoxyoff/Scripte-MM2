@@ -2173,7 +2173,7 @@ local function calculerEchelleEcran()
     -- La grande fenetre garde son adaptation propre.
     local auto = math.min(1, (viewport.X - 28) / (largeurCible + 20), (viewport.Y - 28) / (hauteurCible + 20))
     auto = math.clamp(auto, 0.58, 1)
-    scaleFenetre.Scale = math.floor(auto * (echelleInterface / 100) * 20 + 0.5) / 20
+    scaleFenetre.Scale = auto * (echelleInterface / 100)
 
     -- IMPORTANT : ne jamais reutiliser l'echelle de la grande fenetre pour
     -- la barre reduite. Sur BlueStacks, cela la rendait minuscule et floue.
@@ -2220,8 +2220,8 @@ connecter(workspace:GetPropertyChangedSignal("CurrentCamera"), function()
     connecterAdaptationEcran()
     task.defer(function() if appliquerHUD then appliquerHUD() end end)
 end)
-local cadre = creer("Frame", {
-	Size = UDim2.fromScale(1, 1), BackgroundColor3 = COL.FOND, BorderSizePixel = 0, ClipsDescendants = true,
+local cadre = creer("CanvasGroup", {
+	Size = UDim2.fromScale(1, 1), BackgroundColor3 = COL.FOND, BorderSizePixel = 0, GroupTransparency = 1,
 }, conteneur)
 coins(cadre, 16)
 local poigneeRedimensionnement = creer("TextButton", {
@@ -2381,17 +2381,11 @@ local accentTitre = creer("Frame", {
     Size = UDim2.fromOffset(42, 2),
     Position = UDim2.fromOffset(145, 53),
     BackgroundColor3 = Color3.fromRGB(235, 55, 78),
+    BackgroundTransparency = 0,
     BorderSizePixel = 0,
 }, entete)
-coins(accentTitre, 2)
-creer("UIGradient", {
-    Rotation = 0,
-    Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(120, 35, 54)),
-        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 91, 112)),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(120, 35, 54)),
-    }),
-}, accentTitre)
+-- Couleur unie fixe : le UIGradient et le UICorner sur ce trait de 2 px
+-- clignotaient sous BlueStacks (même cause que le logo noir déjà corrigé).
 local version = creer("Frame", {
     Name = "BadgeVersion",
     Size = UDim2.fromOffset(96, 24),
@@ -2625,6 +2619,8 @@ local function carte(page, hauteur)
 	local bordure = creer("UIStroke", { Thickness = 1, Color = Color3.fromRGB(66, 61, 74), Transparency = 0.3, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, c)
 	local accent = creer("Frame", { Size = UDim2.new(0, 2, 1, -30), Position = UDim2.fromOffset(0, 15), BackgroundColor3 = COL.ROUGE, BorderSizePixel = 0 }, c)
 	coins(accent, 3)
+	connecter(c.MouseEnter, function() tw(bordure, { Transparency = 0.08, Color = Color3.fromRGB(175, 75, 92) }, 0.14); tw(accent, { Size = UDim2.new(0, 3, 1, -22) }, 0.14) end)
+	connecter(c.MouseLeave, function() tw(bordure, { Transparency = 0.3, Color = Color3.fromRGB(66, 61, 74) }, 0.16); tw(accent, { Size = UDim2.new(0, 2, 1, -30) }, 0.16) end)
 	return c
 end
 local function creerInterrupteurDans(c, x, y, defaut, rappel)
