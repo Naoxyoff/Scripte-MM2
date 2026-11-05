@@ -42,12 +42,21 @@ local VirtualUser = game:GetService("VirtualUser")
 local joueur = Players.LocalPlayer
 local environnementGlobal = getgenv and getgenv() or _G
 local connexionsGlobales = environnementGlobal.__TENEBRES_CONNEXIONS
+-- Les callbacks du script restent en attente jusqu'à la fin de l'écran de chargement.
+local chargementTermine = false
 if type(connexionsGlobales) ~= "table" then
     connexionsGlobales = setmetatable({}, { __mode = "k" })
     environnementGlobal.__TENEBRES_CONNEXIONS = connexionsGlobales
 end
 local function connecter(signal, rappel)
-    local connexion = signal:Connect(rappel)
+    local connexion = signal:Connect(function(...)
+        while not chargementTermine and not (environnementGlobal.__TENEBRES_FERMER == true) do
+            task.wait(0.05)
+        end
+        if chargementTermine then
+            rappel(...)
+        end
+    end)
     connexionsGlobales[connexion] = true
     return connexion
 end
@@ -7029,7 +7038,7 @@ end)
 			ZIndex = 906,
 		})
 
-		local connexion = connecter(UserInputService.InputBegan, function(input)
+		local connexion = UserInputService.InputBegan:Connect(function(input)
 			if input.UserInputType == Enum.UserInputType.Keyboard
 				or input.UserInputType == Enum.UserInputType.MouseButton1
 				or input.UserInputType == Enum.UserInputType.Touch then
@@ -7138,6 +7147,8 @@ end)
 			tw(cadre, {GroupTransparency = (100 - opaciteFenetre) / 100}, 0.4)
 		end)
 	end
+    -- Le chargement est terminé : les callbacks et contrôles du script peuvent agir.
+    chargementTermine = true
 end)()
 do
 	DIAG.derniereHeartbeat = os.clock()
