@@ -881,7 +881,7 @@ flyControl.activerFly = function(etat, silencieux)
     etat = etat == true
     if etat and flingActif then
         if notifierInterface and not silencieux then
-            notifierInterface("Fling en cours : fly bloqué", Color3.fromRGB(255, 150, 50), "fly_fling_" .. tostring(os.clock()))
+            notifierInterface("Fling en cours : fly bloqué", Color3.fromRGB(255, 255, 255), "fly_fling_" .. tostring(os.clock()))
         end
         if flyControl.synchroniserFly then flyControl.synchroniserFly(flyOn) end
         return
@@ -895,7 +895,7 @@ flyControl.activerFly = function(etat, silencieux)
     if flyControl.synchroniserFly then flyControl.synchroniserFly(flyOn) end
     if notifierInterface and not silencieux then
         notifierInterface(flyOn and "Fly activé" or "Fly désactivé",
-            flyOn and Color3.fromRGB(74, 222, 128) or Color3.fromRGB(57, 52, 76),
+            flyOn and Color3.fromRGB(255, 20, 50) or Color3.fromRGB(57, 52, 76),
             "fly_" .. tostring(os.clock()))
     end
 end
@@ -903,7 +903,7 @@ flyControl.activerNoclip = function(etat, silencieux)
     etat = etat == true
     if etat and flingActif then
         if notifierInterface and not silencieux then
-            notifierInterface("Fling en cours : noclip bloqué", Color3.fromRGB(255, 150, 50), "noclip_fling_" .. tostring(os.clock()))
+            notifierInterface("Fling en cours : noclip bloqué", Color3.fromRGB(255, 255, 255), "noclip_fling_" .. tostring(os.clock()))
         end
         if flyControl.synchroniserNoclip then flyControl.synchroniserNoclip(noclipOn) end
         return
@@ -918,7 +918,7 @@ flyControl.activerNoclip = function(etat, silencieux)
     if flyControl.synchroniserNoclip then flyControl.synchroniserNoclip(noclipOn) end
     if notifierInterface and not silencieux then
         notifierInterface(noclipOn and "Noclip activé" or "Noclip désactivé",
-            noclipOn and Color3.fromRGB(74, 222, 128) or Color3.fromRGB(57, 52, 76),
+            noclipOn and Color3.fromRGB(255, 20, 50) or Color3.fromRGB(57, 52, 76),
             "noclip_" .. tostring(os.clock()))
     end
 end
@@ -950,18 +950,18 @@ local COL = {
 	COULEUR_INNOCENT = Color3.fromRGB(60, 230, 110),
 	COULEUR_ARME = Color3.fromRGB(255, 240, 120),
 	VIOLET = Color3.fromRGB(200, 38, 60),
-	ORCHIDEE = Color3.fromRGB(255, 92, 112),
-	VERT = Color3.fromRGB(74, 222, 128),
+	ORCHIDEE = Color3.fromRGB(255, 70, 90),
+	VERT = Color3.fromRGB(255, 20, 50),
 	ROUGE = Color3.fromRGB(220, 39, 61),
-    ORANGE = Color3.fromRGB(255, 150, 50),
-	FOND = Color3.fromRGB(6, 7, 10),
-	LATERAL = Color3.fromRGB(10, 11, 15),
-	CARTE = Color3.fromRGB(17, 18, 24),
-	CARTE_CLAIRE = Color3.fromRGB(27, 29, 37),
-	BORDURE = Color3.fromRGB(54, 45, 53),
-	GRIS = Color3.fromRGB(48, 50, 60),
-	TEXTE = Color3.fromRGB(245, 242, 238),
-	MUET = Color3.fromRGB(157, 157, 162),
+    ORANGE = Color3.fromRGB(255, 255, 255),
+	FOND = Color3.fromRGB(4, 4, 4),
+	LATERAL = Color3.fromRGB(8, 8, 8),
+	CARTE = Color3.fromRGB(16, 16, 16),
+	CARTE_CLAIRE = Color3.fromRGB(30, 30, 30),
+	BORDURE = Color3.fromRGB(72, 36, 42),
+	GRIS = Color3.fromRGB(52, 52, 52),
+	TEXTE = Color3.fromRGB(255, 255, 255),
+	MUET = Color3.fromRGB(170, 170, 170),
 	BLANC = Color3.new(1, 1, 1),
 }
 local NOMS_ROLES = { murder = "Murder", sherif = "Sheriff", heros = "Héros", innocent = "Innocent" }
@@ -2237,49 +2237,25 @@ connecter(poigneeRedimensionnement.MouseEnter, function() poigneeRedimensionneme
 connecter(poigneeRedimensionnement.MouseLeave, function() poigneeRedimensionnement.TextColor3 = COL.ORCHIDEE end)
 do
 local contourFenetre = creer("UIStroke", {
-	Thickness = 1.25, Color = Color3.fromRGB(139, 53, 69), Transparency = 0.18, ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+	Thickness = 1, Color = Color3.fromRGB(220, 38, 55), Transparency = 0.1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 }, cadre)
 cadre.GroupTransparency = (100 - opaciteFenetre) / 100
-creer("UIGradient", {
-	Rotation = 90,
-	Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, Color3.fromRGB(206, 69, 88)),
-		ColorSequenceKeypoint.new(0.42, Color3.fromRGB(88, 40, 53)),
-		ColorSequenceKeypoint.new(1, Color3.fromRGB(34, 35, 43)),
-	}),
-}, contourFenetre)
 local voile = creer("Frame", {
 	Size = UDim2.fromScale(1, 1),
-	BackgroundColor3 = Color3.fromRGB(22, 12, 15),
+	BackgroundColor3 = Color3.fromRGB(4, 4, 4),
 	BorderSizePixel = 0,
 }, cadre)
-creer("UIGradient", {
-	Rotation = 90,
-	Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, Color3.fromRGB(22, 12, 15)),
-		ColorSequenceKeypoint.new(0.35, COL.FOND),
-		ColorSequenceKeypoint.new(1, Color3.fromRGB(14, 8, 10)),
-	}),
-}, voile)
 local fondEntete = creer("Frame", {
     Name = "FondEntete",
     Size = UDim2.new(1, 0, 0, HAUT_ENTETE),
-    BackgroundColor3 = Color3.fromRGB(12, 13, 17),
+    BackgroundColor3 = Color3.fromRGB(10, 10, 10),
     BorderSizePixel = 0,
 }, cadre)
-creer("UIGradient", {
-    Rotation = 0,
-    Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(24, 16, 21)),
-        ColorSequenceKeypoint.new(0.52, Color3.fromRGB(15, 16, 21)),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(10, 12, 16)),
-    }),
-}, fondEntete)
 creer("Frame", {
     Name = "RailEntete",
     Size = UDim2.fromOffset(3, HAUT_ENTETE - 24),
     Position = UDim2.fromOffset(0, 12),
-    BackgroundColor3 = Color3.fromRGB(235, 55, 72),
+    BackgroundColor3 = Color3.fromRGB(255, 20, 50),
     BorderSizePixel = 0,
 }, fondEntete)
 end
@@ -2301,7 +2277,7 @@ local icone = creer("Frame", {
 coins(icone, 12)
 creer("UIStroke", {
     Thickness = 1.35,
-    Color = Color3.fromRGB(190, 194, 207),
+    Color = Color3.fromRGB(255, 255, 255),
     Transparency = 0.12,
     ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 }, icone)
@@ -2359,7 +2335,7 @@ figerTexte(texte(entete, {
     Text = "LES TÉNÈBRES",
     Font = Enum.Font.GothamBlack,
     TextSize = 21,
-    TextColor3 = Color3.fromRGB(255, 250, 251),
+    TextColor3 = Color3.fromRGB(255, 255, 255),
     TextStrokeColor3 = Color3.fromRGB(120, 24, 43),
     TextStrokeTransparency = 0.78,
     TextXAlignment = Enum.TextXAlignment.Center,
@@ -2371,7 +2347,7 @@ figerTexte(texte(entete, {
     Text = "MURDER MYSTERY 2",
     Font = Enum.Font.GothamBold,
     TextSize = 11,
-    TextColor3 = Color3.fromRGB(255, 116, 132),
+    TextColor3 = Color3.fromRGB(255, 45, 70),
     TextXAlignment = Enum.TextXAlignment.Center,
     TextYAlignment = Enum.TextYAlignment.Center,
 }), "MURDER MYSTERY 2")
@@ -2390,7 +2366,7 @@ local version = creer("Frame", {
     Name = "BadgeVersion",
     Size = UDim2.fromOffset(96, 24),
     Position = UDim2.fromOffset(269, 20),
-    BackgroundColor3 = Color3.fromRGB(41, 22, 32),
+    BackgroundColor3 = Color3.fromRGB(20, 20, 20),
     BorderSizePixel = 0,
 }, entete)
 coins(version, 7)
@@ -2398,14 +2374,14 @@ coins(version, 7)
 -- clignotaient sous BlueStacks.
 creer("UIStroke", {
     Thickness = 1,
-    Color = Color3.fromRGB(190, 77, 99),
+    Color = Color3.fromRGB(170, 45, 60),
     Transparency = 0.16,
     ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 }, version)
 texte(version, {
     Size = UDim2.fromScale(1, 1),
     Text = "VERSION 1.3",
-    TextColor3 = Color3.fromRGB(255, 116, 132),
+    TextColor3 = Color3.fromRGB(255, 45, 70),
     Font = Enum.Font.GothamBold,
     TextSize = 9,
     TextXAlignment = Enum.TextXAlignment.Center,
@@ -2414,10 +2390,10 @@ local boutonReduire = creer("TextButton", {
     Name = "BoutonReduire",
     Size = UDim2.fromOffset(38, 38),
     Position = UDim2.new(1, -58, 0, 13),
-    BackgroundColor3 = Color3.fromRGB(31, 23, 29),
+    BackgroundColor3 = Color3.fromRGB(24, 24, 24),
     BorderSizePixel = 0,
     Text = "–",
-    TextColor3 = Color3.fromRGB(255, 126, 139),
+    TextColor3 = Color3.fromRGB(255, 255, 255),
     Font = Enum.Font.GothamMedium,
     TextSize = 22,
     AutoButtonColor = false,
@@ -2426,17 +2402,17 @@ local boutonReduire = creer("TextButton", {
 coins(boutonReduire, 12)
 creer("UIStroke", {
     Thickness = 1,
-    Color = Color3.fromRGB(104, 58, 68),
+    Color = Color3.fromRGB(150, 30, 45),
     Transparency = 0.35,
     ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 }, boutonReduire)
 connecter(boutonReduire.MouseEnter, function()
-    boutonReduire.BackgroundColor3 = Color3.fromRGB(66, 27, 37)
-    boutonReduire.TextColor3 = Color3.fromRGB(255, 239, 241)
+    boutonReduire.BackgroundColor3 = Color3.fromRGB(150, 20, 35)
+    boutonReduire.TextColor3 = Color3.fromRGB(255, 255, 255)
 end)
 connecter(boutonReduire.MouseLeave, function()
-    boutonReduire.BackgroundColor3 = Color3.fromRGB(31, 23, 29)
-    boutonReduire.TextColor3 = Color3.fromRGB(255, 126, 139)
+    boutonReduire.BackgroundColor3 = Color3.fromRGB(24, 24, 24)
+    boutonReduire.TextColor3 = Color3.fromRGB(255, 255, 255)
 end)
 connecter(boutonReduire.Activated, function()
     if basculerReduit then basculerReduit() end
@@ -2444,15 +2420,8 @@ end)
 local ligneEntete = creer("Frame", {
 	Size = UDim2.new(1, 0, 0, 1), Position = UDim2.fromOffset(0, HAUT_ENTETE),
 	-- Couleur de secours sombre : le gradient ne doit jamais révéler un pixel blanc au montage.
-	BackgroundColor3 = Color3.fromRGB(75, 30, 35), BorderSizePixel = 0,
+	BackgroundColor3 = Color3.fromRGB(220, 38, 55), BorderSizePixel = 0,
 }, cadre)
-creer("UIGradient", {
-	Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, COL.VIOLET),
-		ColorSequenceKeypoint.new(0.6, Color3.fromRGB(75, 30, 35)),
-		ColorSequenceKeypoint.new(1, Color3.fromRGB(29, 24, 26)),
-	}),
-}, ligneEntete)
 end
 local lateral = creer("Frame", {
 	Size = UDim2.new(0, LARGEUR_LATERAL, 1, -HAUT_ENTETE - 1), Position = UDim2.fromOffset(0, HAUT_ENTETE + 1),
@@ -2467,7 +2436,7 @@ local navigation = creer("ScrollingFrame", {
 }, lateral)
 creer("Frame", {
 	Size = UDim2.new(0, 1, 1, 0), Position = UDim2.new(1, -1, 0, 0),
-	BackgroundColor3 = Color3.fromRGB(40, 38, 58), BorderSizePixel = 0,
+	BackgroundColor3 = Color3.fromRGB(60, 30, 34), BorderSizePixel = 0,
 }, lateral)
 local contenu = creer("Frame", {
 	Size = UDim2.new(1, -LARGEUR_LATERAL, 1, -HAUT_ENTETE - 1),
@@ -2506,7 +2475,7 @@ local function selectionner(nom)
 		local sel = (n == nom)
 		tw(o.bouton, {
             BackgroundTransparency = sel and 0 or 1,
-            BackgroundColor3 = sel and Color3.fromRGB(43, 23, 31) or Color3.fromRGB(28, 20, 23),
+            BackgroundColor3 = sel and Color3.fromRGB(45, 14, 20) or Color3.fromRGB(20, 20, 20),
             TextColor3 = sel and COL.BLANC or COL.MUET,
         }, 0.15)
 		tw(o.barre, { BackgroundTransparency = sel and 0 or 1 }, 0.15)
@@ -2516,14 +2485,14 @@ local function ajouterOnglet(nom, index, libelle)
 	libelle = libelle or nom
 	local b = creer("TextButton", {
 		Size = UDim2.new(1, -24, 0, 40), Position = UDim2.fromOffset(12, 8 + (index - 1) * 46),
-		BackgroundColor3 = Color3.fromRGB(54, 22, 27), BackgroundTransparency = 1, Text = "     " .. libelle,
+		BackgroundColor3 = Color3.fromRGB(20, 20, 20), BackgroundTransparency = 1, Text = "     " .. libelle,
 		TextColor3 = COL.MUET, Font = Enum.Font.GothamMedium, TextSize = 12,
 		TextXAlignment = Enum.TextXAlignment.Left, AutoButtonColor = false,
 	}, navigation)
 	coins(b, 11)
     creer("UIStroke", { Thickness = 1, Color = Color3.fromRGB(100, 36, 48), Transparency = 0.82, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, b)
 	local barre = creer("Frame", {
-		Size = UDim2.fromOffset(4, 28), Position = UDim2.fromOffset(7, 6), BackgroundColor3 = Color3.fromRGB(255, 67, 86),
+		Size = UDim2.fromOffset(4, 28), Position = UDim2.fromOffset(7, 6), BackgroundColor3 = Color3.fromRGB(255, 20, 50),
 		BackgroundTransparency = 1, BorderSizePixel = 0,
 	}, b)
 	pilule(barre)
@@ -2545,7 +2514,7 @@ local profil = creer("Frame", {
 }, lateral)
 creer("Frame", {
     Size = UDim2.new(1, -28, 0, 1), Position = UDim2.fromOffset(14, 0),
-    BackgroundColor3 = Color3.fromRGB(38, 29, 31), BorderSizePixel = 0, ZIndex = 3,
+    BackgroundColor3 = Color3.fromRGB(60, 30, 34), BorderSizePixel = 0, ZIndex = 3,
 }, profil)
 local avatar = creer("ImageLabel", {
     Name = "AvatarProfil",
@@ -2599,14 +2568,14 @@ local function section(page, titre)
 end
 local function carte(page, hauteur)
 	local c = creer("Frame", {
-		Size = UDim2.new(1, 0, 0, hauteur), BackgroundColor3 = Color3.fromRGB(20, 17, 20), BorderSizePixel = 0,
+		Size = UDim2.new(1, 0, 0, hauteur), BackgroundColor3 = Color3.fromRGB(16, 16, 16), BorderSizePixel = 0,
 		LayoutOrder = ordre(page), ClipsDescendants = false,
 	}, page)
 	coins(c, 16)
 	-- Fond uni et bordure fixe : le dégradé et l'animation au survol faisaient
 	-- clignoter les cartes sous BlueStacks (le survol se déclenche en boucle au défilement).
-	c.BackgroundColor3 = Color3.fromRGB(17, 18, 24)
-	creer("UIStroke", { Thickness = 1, Color = Color3.fromRGB(66, 61, 74), Transparency = 0.3, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, c)
+	c.BackgroundColor3 = Color3.fromRGB(16, 16, 16)
+	creer("UIStroke", { Thickness = 1, Color = Color3.fromRGB(80, 38, 44), Transparency = 0.3, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, c)
 	creer("Frame", { Size = UDim2.new(0, 2, 1, -30), Position = UDim2.fromOffset(0, 15), BackgroundColor3 = COL.ROUGE, BorderSizePixel = 0 }, c)
 	return c
 end
@@ -2622,7 +2591,7 @@ local function creerInterrupteurDans(c, x, y, defaut, rappel)
 	pilule(rond)
 	local etat = defaut
 	local function afficher()
-		tw(piste, { BackgroundColor3 = etat and COL.ROUGE or Color3.fromRGB(55, 48, 52) }, 0.15)
+		tw(piste, { BackgroundColor3 = etat and COL.ROUGE or Color3.fromRGB(60, 60, 60) }, 0.15)
 		tw(rond, { Position = UDim2.fromOffset(etat and 25 or 3, 3) }, 0.2, Enum.EasingStyle.Back)
 	end
 	connecter(piste.Activated, function()
@@ -2898,7 +2867,7 @@ pilule(iconeB)
 iconeB.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 creer("UIStroke", {
 	Thickness = 1.25,
-	Color = Color3.fromRGB(205, 205, 210),
+	Color = Color3.fromRGB(255, 255, 255),
 	Transparency = 0,
 	ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 }, iconeB)
@@ -3288,7 +3257,7 @@ local definitionsTuiles = {
 }
 for i, definition in ipairs(definitionsTuiles) do
     local tuile = creer("Frame", {
-        Name = "TuileStat" .. i, LayoutOrder = i, BackgroundColor3 = Color3.fromRGB(24, 22, 27),
+        Name = "TuileStat" .. i, LayoutOrder = i, BackgroundColor3 = Color3.fromRGB(20, 20, 20),
         BackgroundTransparency = 0.08, BorderSizePixel = 0,
     }, grilleStats)
     coins(tuile, 8)
@@ -4154,7 +4123,7 @@ local function creerEntree(autre)
     })
     local bTPA = creer("TextButton", {
         Size = UDim2.fromOffset(70, 28), Position = UDim2.new(1, -86, 0.5, -14),
-        BackgroundColor3 = Color3.fromRGB(105, 38, 53), Text = "TPA", TextColor3 = COL.BLANC,
+        BackgroundColor3 = Color3.fromRGB(110, 20, 35), Text = "TPA", TextColor3 = COL.BLANC,
         Font = Enum.Font.GothamBold, TextSize = 12, AutoButtonColor = false,
     }, c)
     coins(bTPA, 8)
@@ -4164,7 +4133,7 @@ local function creerEntree(autre)
     entrees[autre] = { carte = c, sub = sub, titre = titre }
 	    local bFling = creer("TextButton", {
         Size = UDim2.fromOffset(70, 28), Position = UDim2.new(1, -162, 0.5, -14),
-        BackgroundColor3 = Color3.fromRGB(180, 48, 65), Text = "FLING", TextColor3 = COL.BLANC,
+        BackgroundColor3 = Color3.fromRGB(220, 30, 50), Text = "FLING", TextColor3 = COL.BLANC,
         Font = Enum.Font.GothamBold, TextSize = 12, AutoButtonColor = false,
     }, c)
     coins(bFling, 8)
@@ -4218,9 +4187,9 @@ local function construireAutoFarm()
 local pageAF = pages["Auto Farm"]
 local farmCfg = flyControl.farm
 local VERT_ON = Color3.fromRGB(255, 20, 50) -- ancien vert, maintenant rouge vif (nom conservé pour ne rien casser)
-local GRIS_PISTE = Color3.fromRGB(72, 72, 78)
-local BLEU_PISTE = Color3.fromRGB(56, 132, 255)
-local JAUNE_PIECE = Color3.fromRGB(235, 200, 80)
+local GRIS_PISTE = Color3.fromRGB(60, 60, 60)
+local BLEU_PISTE = Color3.fromRGB(255, 20, 50)
+local JAUNE_PIECE = Color3.fromRGB(255, 255, 255)
 local DISTANCE_CONTACT = 5
 local DUREE_CONTACT = 0.20
 local RAYON_LOBBY = 80
@@ -4295,7 +4264,7 @@ if bordurePanneau then
 	bordurePanneau.Color = VERT_ON
 	bordurePanneau.Transparency = 0.45
 end
-local iconePiece = creer("Frame", { Size = UDim2.fromOffset(30, 30), Position = UDim2.fromOffset(14, 13), BackgroundColor3 = Color3.fromRGB(32, 34, 28), BorderSizePixel = 0 }, panneau)
+local iconePiece = creer("Frame", { Size = UDim2.fromOffset(30, 30), Position = UDim2.fromOffset(14, 13), BackgroundColor3 = Color3.fromRGB(24, 24, 24), BorderSizePixel = 0 }, panneau)
 pilule(iconePiece)
 creer("UIStroke", { Thickness = 1.5, Color = JAUNE_PIECE, Transparency = 0.4, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, iconePiece)
 texte(iconePiece, { Size = UDim2.fromScale(1, 1), Text = "◉", TextColor3 = JAUNE_PIECE, Font = Enum.Font.GothamBold, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Center })
@@ -5920,11 +5889,11 @@ local function boutonCible(libelle, position, taille, couleur, action)
 end
 boutonCible("◀", UDim2.fromOffset(22, 52), UDim2.fromOffset(34, 30), COL.CARTE_CLAIRE, function() changerCible(-1) end)
 boutonCible("▶", UDim2.fromOffset(60, 52), UDim2.fromOffset(34, 30), COL.CARTE_CLAIRE, function() changerCible(1) end)
-boutonCible("ÉPAULES", UDim2.new(1, -206, 0, 52), UDim2.fromOffset(92, 30), Color3.fromRGB(180, 48, 65), function()
+boutonCible("ÉPAULES", UDim2.new(1, -206, 0, 52), UDim2.fromOffset(92, 30), Color3.fromRGB(220, 30, 50), function()
     rafraichirCibles()
     if cibleChoisie then demarrerSuivi("epaules", cibleChoisie) else noterSuivi("Aucun joueur à cibler", COL.ORANGE) end
 end)
-boutonCible("ORBITE", UDim2.new(1, -108, 0, 52), UDim2.fromOffset(92, 30), Color3.fromRGB(105, 38, 53), function()
+boutonCible("ORBITE", UDim2.new(1, -108, 0, 52), UDim2.fromOffset(92, 30), Color3.fromRGB(110, 20, 35), function()
     rafraichirCibles()
     if cibleChoisie then demarrerSuivi("orbite", cibleChoisie) else noterSuivi("Aucun joueur à cibler", COL.ORANGE) end
 end)
@@ -6466,7 +6435,7 @@ rafraichirEmotes = function()
         end
         local estFavori = favoris[e.emote.nom] == true
         e.etoile.Text = estFavori and "★" or "☆"
-        e.etoile.TextColor3 = estFavori and Color3.fromRGB(255, 205, 60) or COL.MUET
+        e.etoile.TextColor3 = estFavori and Color3.fromRGB(255, 20, 50) or COL.MUET
         local actif = (emoteCourante == e.emote) and piste ~= nil
         e.bouton.Text = actif and "Actif" or "Jouer"
         e.bouton.BackgroundColor3 = actif and COL.VERT or COL.VIOLET
@@ -6919,9 +6888,9 @@ end)
 	local ok = pcall(function()
 		local ROUGE = Color3.fromRGB(255, 35, 68)
 		local ROUGE_CLAIR = Color3.fromRGB(255, 105, 125)
-		local NOIR = Color3.fromRGB(3, 4, 8)
-		local BLANC = Color3.fromRGB(246, 244, 247)
-		local GRIS = Color3.fromRGB(145, 145, 158)
+		local NOIR = Color3.fromRGB(0, 0, 0)
+		local BLANC = Color3.fromRGB(255, 255, 255)
+		local GRIS = Color3.fromRGB(150, 150, 150)
 		local fini = false
 		local connexionsIntro = {}
 		local objets = {}
@@ -6953,7 +6922,7 @@ end)
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.fromScale(0.5, 0.48),
 			Size = UDim2.fromScale(0.9, 0.9),
-			BackgroundColor3 = Color3.fromRGB(22, 19, 27),
+			BackgroundColor3 = Color3.fromRGB(20, 20, 20),
 			BackgroundTransparency = 0.66,
 			BorderSizePixel = 0,
 			ZIndex = 891,
@@ -6974,7 +6943,7 @@ end)
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				Position = UDim2.fromScale(math.random(), math.random()),
 				Size = UDim2.fromOffset(math.random(1, 3), math.random(1, 3)),
-				BackgroundColor3 = i % 5 == 0 and ROUGE_CLAIR or Color3.fromRGB(180, 180, 195),
+				BackgroundColor3 = i % 5 == 0 and ROUGE_CLAIR or Color3.fromRGB(190, 190, 190),
 				BackgroundTransparency = 0.35 + math.random() * 0.55,
 				BorderSizePixel = 0,
 				ZIndex = 892,
@@ -7016,7 +6985,7 @@ end)
 			arrondir(r, 255)
 			garder(creer("UIStroke", {
 				Thickness = epaisseur,
-				Color = Color3.fromRGB(171, 175, 190),
+				Color = Color3.fromRGB(200, 200, 200),
 				Transparency = math.min(0.88, transparence + 0.22),
 			}, r))
 			return r
@@ -7042,7 +7011,7 @@ end)
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.fromScale(0.5, 0.48),
 			Size = UDim2.fromOffset(112, 112),
-			BackgroundColor3 = Color3.fromRGB(31, 32, 42),
+			BackgroundColor3 = Color3.fromRGB(30, 30, 30),
 			BackgroundTransparency = 0.04,
 			BorderSizePixel = 0,
 			ZIndex = 903,
@@ -7051,16 +7020,16 @@ end)
 		garder(creer("UIGradient", {
 			Rotation = 45,
 			Color = ColorSequence.new({
-				ColorSequenceKeypoint.new(0, Color3.fromRGB(118, 121, 139)),
-				ColorSequenceKeypoint.new(0.45, Color3.fromRGB(39, 40, 52)),
-				ColorSequenceKeypoint.new(1, Color3.fromRGB(12, 13, 19)),
+				ColorSequenceKeypoint.new(0, Color3.fromRGB(120, 120, 120)),
+				ColorSequenceKeypoint.new(0.45, Color3.fromRGB(40, 40, 40)),
+				ColorSequenceKeypoint.new(1, Color3.fromRGB(12, 12, 12)),
 			}),
 		}, haloEmbleme))
 		local embleme = frame(centre, {
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.fromScale(0.5, 0.48),
 			Size = UDim2.fromOffset(76, 76),
-			BackgroundColor3 = Color3.fromRGB(246, 242, 243),
+			BackgroundColor3 = Color3.fromRGB(255, 255, 255),
 			BorderSizePixel = 0,
 			Rotation = 45,
 			ZIndex = 905,
@@ -7068,7 +7037,7 @@ end)
 		arrondir(embleme, 17)
 		garder(creer("UIStroke", {
 			Thickness = 2,
-			Color = Color3.fromRGB(206, 208, 218),
+			Color = Color3.fromRGB(220, 220, 220),
 			Transparency = 0.12,
 		}, embleme))
 		local lettre = label(embleme, {
@@ -7165,7 +7134,7 @@ end)
 			AnchorPoint = Vector2.new(0.5, 0),
 			Position = UDim2.new(0.5, 0, 0, 342),
 			Size = UDim2.new(0.76, 0, 0, 4),
-			BackgroundColor3 = Color3.fromRGB(43, 35, 43),
+			BackgroundColor3 = Color3.fromRGB(45, 45, 45),
 			BorderSizePixel = 0,
 			ZIndex = 905,
 			ClipsDescendants = true,
