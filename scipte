@@ -2201,14 +2201,9 @@ creer("UIStroke", {
     Transparency = 0.12,
     ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 }, icone)
-creer("UIGradient", {
-    Rotation = 135,
-    Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(252, 248, 248)),
-        ColorSequenceKeypoint.new(0.48, Color3.fromRGB(232, 226, 228)),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(196, 188, 192)),
-    }),
-}, icone)
+-- Fond blanc uni : le UIGradient rendait le logo noir sur BlueStacks.
+icone.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+icone.BackgroundTransparency = 0
 local texteIcone = texte(icone, {
     Size = UDim2.fromScale(1, 1),
     Text = "T",
