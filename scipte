@@ -2226,6 +2226,8 @@ local logoImageEntete = creer("ImageLabel", {
     Position = UDim2.fromOffset(1, 1),
     BackgroundTransparency = 1,
     Image = LOGO_T_IMAGE,
+    ImageColor3 = Color3.fromRGB(255, 255, 255),
+    ImageTransparency = 0,
     ScaleType = Enum.ScaleType.Fit,
     Visible = LOGO_T_READY,
     ZIndex = texteIcone.ZIndex,
@@ -2775,11 +2777,11 @@ local barreG = creer("CanvasGroup", {
 pilule(barreG)
 do
 local contourBarre = creer("UIStroke", {
-	Thickness = 1.5, Color = COL.BLANC, ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+	Thickness = 1.8,
+	Color = Color3.fromRGB(220, 38, 55),
+	Transparency = 0,
+	ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 }, barreG)
-creer("UIGradient", {
-	Color = ColorSequence.new(Color3.fromRGB(220, 38, 55), Color3.fromRGB(42, 25, 29)),
-}, contourBarre)
 local voileBarre = creer("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = COL.BLANC, BorderSizePixel = 0 }, barreG)
 creer("UIGradient", {
 	Color = ColorSequence.new(Color3.fromRGB(30, 15, 18), Color3.fromRGB(9, 10, 12)),
@@ -2788,16 +2790,13 @@ local iconeB = creer("Frame", {
 	Size = UDim2.fromOffset(32, 32), Position = UDim2.fromOffset(9, 7), BackgroundColor3 = COL.VIOLET,
 }, barreG)
 pilule(iconeB)
-iconeB.BackgroundColor3 = Color3.new(1, 1, 1)
-creer("UIGradient", {
-	Rotation = 135,
-	Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, Color3.fromRGB(252, 248, 248)),
-		ColorSequenceKeypoint.new(0.48, Color3.fromRGB(232, 226, 228)),
-		ColorSequenceKeypoint.new(1, Color3.fromRGB(196, 188, 192)),
-	}),
+iconeB.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+creer("UIStroke", {
+	Thickness = 1.25,
+	Color = Color3.fromRGB(205, 205, 210),
+	Transparency = 0,
+	ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 }, iconeB)
-creer("UIStroke", { Thickness = 1.25, Color = Color3.fromRGB(190, 194, 207), Transparency = 0.12, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, iconeB)
 local texteIconeB = texte(iconeB, {
 	Size = UDim2.fromScale(1, 1), Text = "T", Font = Enum.Font.Fantasy, TextSize = 23,
 	TextColor3 = Color3.fromRGB(200, 30, 52), TextXAlignment = Enum.TextXAlignment.Center,
@@ -2808,7 +2807,10 @@ local texteIconeB = texte(iconeB, {
 local logoImageReduit = creer("ImageLabel", {
     Name = "LogoTImageReduit", Size = UDim2.new(1, -2, 1, -2),
     Position = UDim2.fromOffset(1, 1), BackgroundTransparency = 1,
-    Image = LOGO_T_IMAGE, ScaleType = Enum.ScaleType.Fit,
+    Image = LOGO_T_IMAGE,
+    ImageColor3 = Color3.fromRGB(255, 255, 255),
+    ImageTransparency = 0,
+    ScaleType = Enum.ScaleType.Fit,
     Visible = LOGO_T_READY, ZIndex = texteIconeB.ZIndex,
 }, iconeB)
 creer("UIGradient", {
@@ -2827,6 +2829,25 @@ pilule(imageIconeB)
 table.insert(imagesIcones, imageIconeB)
 table.insert(textesIcones, texteIconeB)
 if imageSource then afficherImage(imageSource) end
+
+-- Contour au premier plan : reste visible même si les calques internes
+-- sont rendus différemment par BlueStacks.
+local contourBarreVisible = creer("Frame", {
+	Name = "ContourRougeBarreReduite",
+	Size = UDim2.fromScale(1, 1),
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+	Active = false,
+	ZIndex = 20,
+}, barreG)
+pilule(contourBarreVisible)
+creer("UIStroke", {
+	Thickness = 1.8,
+	Color = Color3.fromRGB(220, 38, 55),
+	Transparency = 0,
+	ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+}, contourBarreVisible)
+
 figerTexte(texte(barreG, {
 	Size = UDim2.fromOffset(110, 16), Position = UDim2.fromOffset(49, 7),
 	Text = "Les Tenebres", Font = Enum.Font.GothamBold, TextSize = 14,
