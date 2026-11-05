@@ -2767,7 +2767,11 @@ local barreC = creer("Frame", {
 scaleBarre = creer("UIScale", {Scale = 1}, barreC)
 calculerEchelleEcran()
 local barreG = creer("CanvasGroup", {
-	Size = UDim2.fromScale(1, 1), BackgroundColor3 = COL.FOND, BorderSizePixel = 0, GroupTransparency = 1,
+	Size = UDim2.fromScale(1, 1),
+	BackgroundColor3 = Color3.fromRGB(0, 0, 0),
+	BackgroundTransparency = 0,
+	BorderSizePixel = 0,
+	GroupTransparency = 1,
 }, barreC)
 pilule(barreG)
 do
@@ -2777,10 +2781,14 @@ local contourBarre = creer("UIStroke", {
 	Transparency = 0,
 	ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 }, barreG)
-local voileBarre = creer("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = COL.BLANC, BorderSizePixel = 0 }, barreG)
-creer("UIGradient", {
-	Color = ColorSequence.new(Color3.fromRGB(30, 15, 18), Color3.fromRGB(9, 10, 12)),
-}, voileBarre)
+-- Fond noir uni dès la création : aucun dégradé rouge ne peut apparaître au lancement.
+local voileBarre = creer("Frame", {
+	Name = "FondNoirBarreReduite",
+	Size = UDim2.fromScale(1, 1),
+	BackgroundColor3 = Color3.fromRGB(0, 0, 0),
+	BackgroundTransparency = 0,
+	BorderSizePixel = 0,
+}, barreG)
 local iconeB = creer("Frame", {
 	Size = UDim2.fromOffset(32, 32), Position = UDim2.fromOffset(9, 7), BackgroundColor3 = COL.VIOLET,
 }, barreG)
@@ -6616,8 +6624,9 @@ local function majEtat()
 			if not reduit then barreC.Visible = false end
 		end)
 	else
+		-- Appliquer l'état final avant d'afficher la barre : aucun flash rouge/transitoire.
+		barreG.GroupTransparency = 0
 		barreC.Visible = true
-		tw(barreG, { GroupTransparency = 0 }, 0.18)
 		connecterFinTween(tw(cadre, { GroupTransparency = 1 }, 0.18), function()
 			if reduit then conteneur.Visible = false end
 		end)
