@@ -2390,22 +2390,17 @@ local version = creer("Frame", {
     Name = "BadgeVersion",
     Size = UDim2.fromOffset(96, 24),
     Position = UDim2.fromOffset(269, 20),
-    BackgroundColor3 = Color3.fromRGB(35, 19, 27),
+    BackgroundColor3 = Color3.fromRGB(41, 22, 32),
     BorderSizePixel = 0,
 }, entete)
 coins(version, 7)
+-- Fond uni et bordure à épaisseur entière : le dégradé et l'épaisseur 1.15
+-- clignotaient sous BlueStacks.
 creer("UIStroke", {
-    Thickness = 1.15,
+    Thickness = 1,
     Color = Color3.fromRGB(190, 77, 99),
     Transparency = 0.16,
     ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-}, version)
-creer("UIGradient", {
-    Rotation = 90,
-    Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(58, 27, 39)),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(25, 17, 25)),
-    }),
 }, version)
 texte(version, {
     Size = UDim2.fromScale(1, 1),
@@ -2608,19 +2603,11 @@ local function carte(page, hauteur)
 		LayoutOrder = ordre(page), ClipsDescendants = false,
 	}, page)
 	coins(c, 16)
-	creer("UIGradient", {
-		Rotation = 115,
-		Color = ColorSequence.new({
-			ColorSequenceKeypoint.new(0, Color3.fromRGB(25, 25, 33)),
-			ColorSequenceKeypoint.new(0.55, Color3.fromRGB(17, 18, 24)),
-			ColorSequenceKeypoint.new(1, Color3.fromRGB(13, 14, 19)),
-		}),
-	}, c)
-	local bordure = creer("UIStroke", { Thickness = 1, Color = Color3.fromRGB(66, 61, 74), Transparency = 0.3, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, c)
-	local accent = creer("Frame", { Size = UDim2.new(0, 2, 1, -30), Position = UDim2.fromOffset(0, 15), BackgroundColor3 = COL.ROUGE, BorderSizePixel = 0 }, c)
-	coins(accent, 3)
-	connecter(c.MouseEnter, function() tw(bordure, { Transparency = 0.08, Color = Color3.fromRGB(175, 75, 92) }, 0.14); tw(accent, { Size = UDim2.new(0, 3, 1, -22) }, 0.14) end)
-	connecter(c.MouseLeave, function() tw(bordure, { Transparency = 0.3, Color = Color3.fromRGB(66, 61, 74) }, 0.16); tw(accent, { Size = UDim2.new(0, 2, 1, -30) }, 0.16) end)
+	-- Fond uni et bordure fixe : le dégradé et l'animation au survol faisaient
+	-- clignoter les cartes sous BlueStacks (le survol se déclenche en boucle au défilement).
+	c.BackgroundColor3 = Color3.fromRGB(17, 18, 24)
+	creer("UIStroke", { Thickness = 1, Color = Color3.fromRGB(66, 61, 74), Transparency = 0.3, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, c)
+	creer("Frame", { Size = UDim2.new(0, 2, 1, -30), Position = UDim2.fromOffset(0, 15), BackgroundColor3 = COL.ROUGE, BorderSizePixel = 0 }, c)
 	return c
 end
 local function creerInterrupteurDans(c, x, y, defaut, rappel)
@@ -2722,7 +2709,6 @@ local function optionCurseur(page, nom, description, minimum, maximum, defaut, s
     pilule(piste)
     local rempli = creer("Frame", { Size = UDim2.fromScale(0, 1), BackgroundColor3 = COL.ROUGE, BorderSizePixel = 0 }, piste)
     pilule(rempli)
-    creer("UIGradient", { Color = ColorSequence.new(COL.ROUGE, COL.ORCHIDEE) }, rempli)
     local rond = creer("Frame", {
         Size = UDim2.fromOffset(12, 12), AnchorPoint = Vector2.new(0.5, 0.5),
         Position = UDim2.fromScale(0, 0.5), BackgroundColor3 = COL.BLANC,
@@ -4375,7 +4361,6 @@ local function curseurVert(nom, note, minimum, maximum, defaut, rappel)
     local rond = creer("Frame", { Size = UDim2.fromOffset(15, 15), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0, 0.5), BackgroundColor3 = COL.BLANC, BorderSizePixel = 0, ZIndex = 2 }, piste)
     creer("UIStroke", { Thickness = 1.5, Color = COL.ROUGE, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, rond)
 	pilule(rond)
-	creer("UIGradient", { Color = ColorSequence.new(COL.ROUGE, COL.ORCHIDEE) }, rempli)
     local zone = creer("TextButton", { Size = UDim2.new(1, -32, 0, 24), Position = UDim2.fromOffset(16, 48), BackgroundTransparency = 1, Text = "", AutoButtonColor = false }, c)
     local valeurActuelle = nil
     local function placer(valeur)
