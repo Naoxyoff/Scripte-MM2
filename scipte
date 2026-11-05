@@ -42,23 +42,64 @@ local VirtualUser = game:GetService("VirtualUser")
 local joueur = Players.LocalPlayer
 local environnementGlobal = getgenv and getgenv() or _G
 local connexionsGlobales = environnementGlobal.__TENEBRES_CONNEXIONS
--- Les callbacks du script restent en attente jusqu'à la fin de l'écran de chargement.
+-- Verrou central : aucun callback ni traitement différé ne s'exécute avant
+-- la fin réelle de l'initialisation. Le BindableEvent évite toute boucle d'attente.
 local chargementTermine = false
+local chargementAnnule = false
+local signalFinChargement = Instance.new("BindableEvent")
+local restaurationsEnAttente = {}
 if type(connexionsGlobales) ~= "table" then
     connexionsGlobales = setmetatable({}, { __mode = "k" })
     environnementGlobal.__TENEBRES_CONNEXIONS = connexionsGlobales
 end
+
 local function connecter(signal, rappel)
     local connexion = signal:Connect(function(...)
-        while not chargementTermine and not (environnementGlobal.__TENEBRES_FERMER == true) do
-            task.wait(0.05)
+        if not chargementTermine or environnementGlobal.__TENEBRES_FERMER == true then
+            return
         end
-        if chargementTermine then
-            rappel(...)
-        end
+        rappel(...)
     end)
     connexionsGlobales[connexion] = true
     return connexion
+end
+
+local function attendreChargement()
+    if not chargementTermine and not chargementAnnule then
+        signalFinChargement.Event:Wait()
+    end
+    return chargementTermine and not chargementAnnule
+        and environnementGlobal.__TENEBRES_FERMER ~= true
+end
+
+local function lancerTache(fonction, ...)
+    local args = table.pack(...)
+    task.spawn(function()
+        if not attendreChargement() then return end
+        fonction(table.unpack(args, 1, args.n))
+    end)
+end
+
+local function restaurerApresChargement(fonction)
+    if type(fonction) ~= "function" then return end
+    if chargementTermine then
+        pcall(fonction)
+    else
+        restaurationsEnAttente[#restaurationsEnAttente + 1] = fonction
+    end
+end
+
+local function terminerChargement()
+    if chargementTermine or chargementAnnule then return end
+    chargementTermine = true
+    for i = 1, #restaurationsEnAttente do
+        local ok, erreur = pcall(restaurationsEnAttente[i])
+        if not ok then
+            warn("[Les Ténèbres] Restauration ignorée : " .. tostring(erreur))
+        end
+    end
+    table.clear(restaurationsEnAttente)
+    signalFinChargement:Fire()
 end
 local function deconnecter(connexion)
     if not connexion then return end
@@ -302,6 +343,7 @@ local PAS_POSITION_SURE = 0.25
 local derniereSure = nil
 local derniereMaj = 0
 local suivis = {}
+local joueursSurveilles = setmetatable({}, { __mode = "k" })
 local function desactiverPiece(info, p)
 	if info.parts[p] == nil then
 		info.parts[p] = p.CanCollide
@@ -348,7 +390,8 @@ local function suivre(autre, perso)
 	end))
 end
 local function surveillerJoueur(autre)
-	if autre == joueur or fermee then return end
+	if autre == joueur or fermee or joueursSurveilles[autre] then return end
+	joueursSurveilles[autre] = true
 	connecter(autre.CharacterAdded, function(perso)
 		if fermee or not actif then return end
 		suivre(autre, perso)
@@ -361,7 +404,14 @@ local function surveillerJoueur(autre)
 end
 for _, autre in ipairs(Players:GetPlayers()) do surveillerJoueur(autre) end
 connecter(Players.PlayerAdded, surveillerJoueur)
-connecter(Players.PlayerRemoving, oublier)
+connecter(Players.PlayerRemoving, function(autre)
+	oublier(autre)
+	joueursSurveilles[autre] = nil
+end)
+restaurerApresChargement(function()
+	if fermee then return end
+	for _, autre in ipairs(Players:GetPlayers()) do surveillerJoueur(autre) end
+end)
 local function restaurerCollisions()
 	local aOublier = {}
 	for autre in pairs(suivis) do
@@ -381,10 +431,13 @@ local function nouveauPersonnage(perso)
 	if actif then derniereSure = r.CFrame end
 end
 local debutVieStats = nil
+local personnagesSurvieSuivis = setmetatable({}, { __mode = "k" })
 local function suivreSurvieStats(personnage)
+    if not personnage or personnagesSurvieSuivis[personnage] then return end
     local h = personnage and personnage:FindFirstChildOfClass("Humanoid")
     if not h then h = personnage and personnage:WaitForChild("Humanoid", 10) end
     if not h then return end
+    personnagesSurvieSuivis[personnage] = true
     debutVieStats = os.clock()
     connecter(h.Died, function()
         if debutVieStats then
@@ -396,13 +449,20 @@ local function suivreSurvieStats(personnage)
     end)
 end
 connecter(joueur.CharacterAdded, suivreSurvieStats)
-if joueur.Character then task.spawn(suivreSurvieStats, joueur.Character) end
+if joueur.Character then lancerTache(suivreSurvieStats, joueur.Character) end
 connecter(joueur.CharacterAdded, nouveauPersonnage)
 connecter(joueur.CharacterRemoving, function()
 	racine, humanoide = nil, nil
 	derniereSure = nil
 end)
-if joueur.Character then task.spawn(nouveauPersonnage, joueur.Character) end
+if joueur.Character then lancerTache(nouveauPersonnage, joueur.Character) end
+restaurerApresChargement(function()
+    local personnage = joueur.Character
+    if personnage then
+        nouveauPersonnage(personnage)
+        suivreSurvieStats(personnage)
+    end
+end)
 function definirActif(valeur)
 	actif = valeur == true
 	if actif then
@@ -1016,7 +1076,7 @@ do
 			local joueurDirect = tab.Player or tab.player or tab.UserId or tab.userId or tab.Name or tab.name or tab.DisplayName or tab.displayName
 			if roleDirect and joueurDirect ~= nil then
 				local nomDirect = resoudreNomJoueur(joueurDirect)
-				if nomDirect then res[nomDirect] = roleDirect trouve = true end
+				if nomDirect then res[nomDirect] = roleDirect; trouve = true end
 			end
 			for k, v in pairs(tab) do
 				local role = nil
@@ -1031,15 +1091,15 @@ do
 				end
 				if role then
 					local nom = cleJoueur or resoudreNomJoueur(k)
-					if nom then res[nom] = role trouve = true end
+					if nom then res[nom] = role; trouve = true end
 				elseif roleDansCle then
 					-- Certains paquets serveur rangent directement le joueur sous la clé Murderer/Sheriff.
 					local nom = resoudreNomJoueur(v)
-					if nom then res[nom] = roleDansCle trouve = true
+					if nom then res[nom] = roleDansCle; trouve = true
 					elseif type(v) == "table" then
 						for _, identite in pairs(v) do
 							local nomListe = resoudreNomJoueur(identite)
-							if nomListe then res[nomListe] = roleDansCle trouve = true end
+							if nomListe then res[nomListe] = roleDansCle; trouve = true end
 						end
 					end
 				elseif type(v) == "table" then
@@ -1198,7 +1258,7 @@ do
 			end)
 		end)
 	end
-	task.spawn(function()
+	lancerTache(function()
 		local remotes = RS:WaitForChild("Remotes", 15)
 		if not remotes then return end
 		for _, o in ipairs(remotes:GetDescendants()) do brancher(o) end
@@ -1833,9 +1893,9 @@ local function surveillerMortPersonnage(p, personnage)
 end
 local function connecterSurveillanceMort(p)
 	connecter(p.CharacterAdded, function(personnage)
-		task.spawn(surveillerMortPersonnage, p, personnage)
+		lancerTache(surveillerMortPersonnage, p, personnage)
 	end)
-	if p.Character then task.spawn(surveillerMortPersonnage, p, p.Character) end
+	if p.Character then lancerTache(surveillerMortPersonnage, p, p.Character) end
 end
 for _, p in ipairs(Players:GetPlayers()) do connecterSurveillanceMort(p) end
 connecter(Players.PlayerAdded, connecterSurveillanceMort)
@@ -1972,7 +2032,7 @@ end)
 connecter(workspace.DescendantAdded, function(o)
     if not fermee and o.Name == "GunDrop" then declencherMajImmediate() end
 end)
-task.spawn(function()
+lancerTache(function()
     local prochainCalculRoles = 0
     local prochainCalculVisuels = 0
     local prochainScanArme = 0
@@ -2473,7 +2533,7 @@ avatarProfilImage = avatar
 if imageSource then avatar.Image = imageSource end
 pilule(avatar)
 creer("UIStroke", { Thickness = 2, Color = COL.ROUGE, Transparency = 0.12, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, avatar)
-task.spawn(function()
+lancerTache(function()
     for tentative = 1, 8 do
         if not avatar or not avatar.Parent then return end
         local ok, image, pret = pcall(function()
@@ -2580,7 +2640,9 @@ local function interrupteur(page, nom, description, defaut, rappel)
         enregistrerConfig(cle, v)
         rappel(v)
     end)
-    pcall(rappel, defaut)
+    restaurerApresChargement(function()
+        if not fermee then pcall(rappel, defaut) end
+    end)
     return inter
 end
 local function formaterValeurCurseur(valeur, suffixe)
@@ -2619,7 +2681,9 @@ local function optionCurseur(page, nom, description, minimum, maximum, defaut, s
             enregistrerConfig(cleActivation, v)
             pcall(rappelInterrupteur, v)
         end)
-        pcall(rappelInterrupteur, etatInitial)
+        restaurerApresChargement(function()
+            if not fermee then pcall(rappelInterrupteur, etatInitial) end
+        end)
     end
     local piste = creer("Frame", {
         Size = UDim2.new(1, -136, 0, 6), Position = UDim2.fromOffset(22, 64),
@@ -2665,7 +2729,15 @@ local function optionCurseur(page, nom, description, minimum, maximum, defaut, s
         placer(valeur)
         valeurLabel.Text = formaterValeurCurseur(valeur, suffixe)
         if sauvegarder then enregistrerConfig(cleValeur, valeur) end
-        if rappelValeur then pcall(rappelValeur, valeur) end
+        if rappelValeur then
+            if chargementTermine then
+                pcall(rappelValeur, valeur)
+            else
+                restaurerApresChargement(function()
+                    if not fermee then pcall(rappelValeur, valeur) end
+                end)
+            end
+        end
     end
     appliquerValeur(defaut, false)
     local function depuisX(x)
@@ -2926,7 +2998,7 @@ appliquerHUD = function()
     hudInfos.TextTransparency = hudOpacite / 100
 end
 appliquerHUD()
-task.spawn(function()
+lancerTache(function()
 	while not fermee do
 		if fpsLabel.Visible then
 			local ping = 0
@@ -2948,57 +3020,110 @@ task.spawn(function()
 	end
 end)
 do
+-- Paramètres visuels centralisés : fréquence, épaisseur, opacité et portée.
+local TRACEUR_HZ = 20
+local TRACEUR_EPAISSEUR = 2
+local TRACEUR_TRANSPARENCE = 0.22
+local TRACEUR_DISTANCE_MAX = DISTANCE_MAX_CHAMS
 local traceurs = {}
+
 local function retirerTraceur(p)
-	local t = traceurs[p]
-	if t then t:Destroy() end
-	traceurs[p] = nil
+    local ligne = traceurs[p]
+    if ligne then
+        traceurs[p] = nil
+        pcall(function() ligne:Destroy() end)
+    end
 end
+
+local function nettoyerTraceurs()
+    for p in pairs(traceurs) do
+        retirerTraceur(p)
+    end
+end
+
+connecter(Players.PlayerRemoving, retirerTraceur)
+
 local accumulateurTraceurs = 0
+local intervalleTraceurs = 1 / TRACEUR_HZ
+
 connecter(RunService.RenderStepped, function(dt)
-	if fermee then return end
-    accumulateurTraceurs = accumulateurTraceurs + dt
-    if accumulateurTraceurs < (1 / 10) then return end
-    accumulateurTraceurs = 0
-	local cam = workspace.CurrentCamera
-	if not tracersActifs or not rolesActifs or not cam then
-        if next(traceurs) ~= nil then
-            for p in pairs(traceurs) do retirerTraceur(p) end
+    if fermee then
+        nettoyerTraceurs()
+        return
+    end
+
+    accumulateurTraceurs = accumulateurTraceurs + math.max(0, dt)
+    if accumulateurTraceurs < intervalleTraceurs then return end
+    -- Conserve le reliquat pour stabiliser la fréquence sans accumuler de dérive.
+    accumulateurTraceurs = accumulateurTraceurs % intervalleTraceurs
+
+    local camera = workspace.CurrentCamera
+    if not tracersActifs or not rolesActifs or not camera or not gui or not gui.Parent then
+        if next(traceurs) then nettoyerTraceurs() end
+        return
+    end
+
+    -- Retire aussi les références devenues invalides avant de dessiner.
+    for p, ligne in pairs(traceurs) do
+        if not p.Parent or not ligne or not ligne.Parent then
+            retirerTraceur(p)
         end
-		return
-	end
-	for p in pairs(traceurs) do
-		if not p.Parent then retirerTraceur(p) end
-	end
-	local taille = cam.ViewportSize
-	local depart = Vector2.new(taille.X / 2, taille.Y)
-	for _, p in ipairs(Players:GetPlayers()) do
-		local role = rolesParJoueur[p]
-		local rp = p.Character and p.Character:FindFirstChild("HumanoidRootPart")
-		local voulu = p ~= joueur and rp and (role == "murder" or role == "sherif" or role == "heros")
-		local dessine = false
-		if voulu then
-			local pt, devant = cam:WorldToViewportPoint(rp.Position)
-			if devant then
-				dessine = true
-				local arrivee = Vector2.new(pt.X, pt.Y)
-				local t = traceurs[p]
-				if not t then
-					t = creer("Frame", {
-						Name = "Traceur", AnchorPoint = Vector2.new(0.5, 0.5), BorderSizePixel = 0, ZIndex = 0,
-					}, gui)
-					traceurs[p] = t
-				end
-				local delta = arrivee - depart
-				t.BackgroundColor3 = couleurRole(role)
-				t.BackgroundTransparency = 0.35
-				t.Size = UDim2.fromOffset(delta.Magnitude, 2)
-				t.Position = UDim2.fromOffset((depart.X + arrivee.X) / 2, (depart.Y + arrivee.Y) / 2)
-				t.Rotation = math.deg(math.atan2(delta.Y, delta.X))
-			end
-		end
-		if not dessine then retirerTraceur(p) end
-	end
+    end
+
+    local viewport = camera.ViewportSize
+    local origine = Vector2.new(viewport.X * 0.5, viewport.Y)
+    for _, p in ipairs(Players:GetPlayers()) do
+        local role = rolesParJoueur[p]
+        local personnage = p.Character
+        local root = personnage and personnage:FindFirstChild("HumanoidRootPart")
+        local roleAutorise = role == "murder" or role == "sherif" or role == "heros"
+        local dessine = false
+
+        if p ~= joueur and roleAutorise and root and root:IsA("BasePart") then
+            local distance = (root.Position - camera.CFrame.Position).Magnitude
+            if distance <= TRACEUR_DISTANCE_MAX then
+                local point, visible = camera:WorldToViewportPoint(root.Position)
+                if visible and point.Z > 0 then
+                    local arrivee = Vector2.new(point.X, point.Y)
+                    local delta = arrivee - origine
+                    if delta.Magnitude > 1 then
+                        dessine = true
+                        local ligne = traceurs[p]
+                        if not ligne then
+                            ligne = creer("Frame", {
+                                Name = "TenebresTraceur",
+                                AnchorPoint = Vector2.new(0.5, 0.5),
+                                BorderSizePixel = 0,
+                                BackgroundColor3 = couleurRole(role),
+                                BackgroundTransparency = TRACEUR_TRANSPARENCE,
+                                ZIndex = 5,
+                            }, gui)
+                            creer("UICorner", {
+                                CornerRadius = UDim.new(1, 0),
+                            }, ligne)
+                            creer("UIGradient", {
+                                Transparency = NumberSequence.new({
+                                    NumberSequenceKeypoint.new(0, 0.12),
+                                    NumberSequenceKeypoint.new(1, 0.38),
+                                }),
+                            }, ligne)
+                            traceurs[p] = ligne
+                        end
+
+                        ligne.BackgroundColor3 = couleurRole(role)
+                        ligne.Size = UDim2.fromOffset(delta.Magnitude, TRACEUR_EPAISSEUR)
+                        ligne.Position = UDim2.fromOffset(
+                            (origine.X + arrivee.X) * 0.5,
+                            (origine.Y + arrivee.Y) * 0.5
+                        )
+                        ligne.Rotation = math.deg(math.atan2(delta.Y, delta.X))
+                    end
+                end
+            end
+        end
+
+        if not dessine then retirerTraceur(p) end
+    end
 end)
 end
 
@@ -3225,7 +3350,7 @@ local function pasGraduation(maximum)
     end
     return pas
 end
-task.spawn(function()
+lancerTache(function()
     while not fermee do
         local duree = math.max(1, os.clock() - debutSession)
         local moyenneSurvie = statsMM2.survies > 0 and (statsMM2.survieSecondes / statsMM2.survies) or 0
@@ -3329,7 +3454,7 @@ for i, def in ipairs(defsInfo) do
     })
 end
 
-task.spawn(function()
+lancerTache(function()
 	while not fermee do
 		lignesInfo[1].Text = infoManche
 		lignesInfo[2].Text = infoMurder
@@ -3993,7 +4118,7 @@ local function creerEntree(autre)
         Size = UDim2.fromOffset(34, 34), Position = UDim2.fromOffset(12, 11), BackgroundColor3 = COL.GRIS,
     }, c)
     pilule(photo)
-    task.spawn(function()
+    lancerTache(function()
         pcall(function()
             photo.Image = Players:GetUserThumbnailAsync(autre.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size100x100)
         end)
@@ -4036,7 +4161,7 @@ end
 for _, autre in ipairs(Players:GetPlayers()) do creerEntree(autre) end
 connecter(Players.PlayerAdded, creerEntree)
 connecter(Players.PlayerRemoving, retirerEntree)
-task.spawn(function()
+lancerTache(function()
     while not fermee do
         for autre, e in pairs(entrees) do
             if e.sub and e.sub.Parent then
@@ -4182,7 +4307,9 @@ local function interrupteurVert(nom, description, defaut, rappel)
         rappel(etat)
     end)
     afficher()
-    pcall(rappel, etat)
+    restaurerApresChargement(function()
+        if not fermee then pcall(rappel, etat) end
+    end)
     return { get = function() return etat end, set = function(v)
         if etat == v then return end
         etat = v
@@ -4227,7 +4354,15 @@ local function curseurVert(nom, note, minimum, maximum, defaut, rappel)
         placer(valeur)
         valeurLabel.Text = formaterValeurCurseur(valeur, "")
         if sauvegarder then enregistrerConfig(cle, valeur) end
-        if rappel then pcall(rappel, valeur) end
+        if rappel then
+            if chargementTermine then
+                pcall(rappel, valeur)
+            else
+                restaurerApresChargement(function()
+                    if not fermee then pcall(rappel, valeur) end
+                end)
+            end
+        end
     end
     appliquerValeur(defaut, false)
     local function depuisX(x)
@@ -4397,7 +4532,7 @@ mettreEnFile = function(obj)
 	if traitementAjouts then return end
 	traitementAjouts = true
 	local generation = generationIndex
-	task.spawn(function()
+	lancerTache(function()
 		local tete = 1
 		while tete <= #ajoutsEnFile and not fermee and armee and generation == generationIndex do
 			local t0 = os.clock()
@@ -4425,7 +4560,7 @@ local function construireIndex()
 	if constructionIndex then return end
 	constructionIndex = true
 	local generation = generationIndex
-	task.spawn(function()
+	lancerTache(function()
 		while not fermee and armee and generation == generationIndex
 			and (not racine or not racine.Parent or (verifierLobbyPourIndex and verifierLobbyPourIndex())) do
 			task.wait(0.5)
@@ -4891,7 +5026,7 @@ local function quitterFarm()
 			h.Sit = false
 			h:ChangeState(Enum.HumanoidStateType.GettingUp)
 		end)
-		task.spawn(function()
+		lancerTache(function()
 			for _ = 1, 8 do
 				task.wait(0.05)
 				if enFarm or flyControl.flyOn or flingActif then return end
@@ -5008,7 +5143,7 @@ local function flingMurderJusquAuBout()
 	if flingSacEnCours or not farmCfg.flingFin or not flingGlobal then return end
 	flingSacEnCours = true
 	local generation = generationManche
-	task.spawn(function()
+	lancerTache(function()
 		while not fermee and armee and farmCfg.flingFin and generation == generationManche do
 			local h = joueur.Character and joueur.Character:FindFirstChildOfClass("Humanoid")
 			if not h or h.Health <= 0 or estAuLobby() then break end
@@ -5495,7 +5630,7 @@ interrupteurVert("Éviter le murder", "Ignore les pièces à moins de 30 studs d
 interrupteurVert("Éviter les autres farmeurs", "Détecte les autres auto farm et prend un chemin différent", farmCfg.eviterFarmeurs, function(v) farmCfg.eviterFarmeurs = v end)
 interrupteurVert("Fling le murder à la fin", "Sac plein ou plus de pièces : fling le murder en boucle jusqu'à ce qu'il soit éjecté", farmCfg.flingFin, function(v) farmCfg.flingFin = v end)
 interrupteurVert("Reset quand le sac est plein", "Détecté quand plusieurs pièces de suite ne se ramassent plus", farmCfg.resetPlein, function(v) farmCfg.resetPlein = v end)
-task.spawn(function()
+lancerTache(function()
 	while not fermee do
 		local secondes = debutFarm and math.max(0, math.floor(os.clock() - debutFarm)) or 0
 		local tempsEstimation = math.max(secondes, 270)
@@ -5992,7 +6127,7 @@ end
 local ServiceContenu = game:GetService("ContentProvider")
 local function chargerAvecDelai(animator, anim, delai)
     local fini, ok, res = false, false, nil
-    task.spawn(function()
+    lancerTache(function()
         local o, r = pcall(function() return animator:LoadAnimation(anim) end)
         ok, res, fini = o, r, true
     end)
@@ -6003,7 +6138,7 @@ local function chargerAvecDelai(animator, anim, delai)
 end
 local function statutAsset(anim, delai)
     local statut, fini = nil, false
-    task.spawn(function()
+    lancerTache(function()
         pcall(function()
             ServiceContenu:PreloadAsync({ anim }, function(_, st) statut = st end)
         end)
@@ -6015,7 +6150,7 @@ local function statutAsset(anim, delai)
 end
 local function resoudreCatalogue(id, delai)
     local fini, resultat = false, nil
-    task.spawn(function()
+    lancerTache(function()
         local ok, objets = pcall(function() return game:GetObjects("rbxassetid://" .. id) end)
         if ok and type(objets) == "table" then
             for _, o in ipairs(objets) do
@@ -6146,7 +6281,7 @@ local function jouerEmote(emote)
     local monJeton = jetonEmote
     emoteCourante = emote
     definirStatut(emote, "Chargement...", COL.ORANGE)
-    task.spawn(function()
+    lancerTache(function()
         local ok, erreur = xpcall(corpsEmote, function(e) return tostring(e) end, emote, hum, monJeton)
         if not ok and monJeton == jetonEmote then
             emoteCourante = nil
@@ -6326,7 +6461,7 @@ end
 appliquerFiltreEmotes()
 pcall(rafraichirEmotes)
 connecter(joueur.CharacterAdded, function() arreterEmoteActuelle() end)
-task.spawn(function()
+lancerTache(function()
     while not fermee do
         if emoteCourante then
             local hum = obtenirHumanoide()
@@ -6471,7 +6606,7 @@ local function installerGun()
             end
         end
     )
-    task.spawn(function()
+    lancerTache(function()
         while not fermee do
             if autoGrab then
                 if suisMurder() then
@@ -6545,6 +6680,11 @@ do
 local function fermerScript()
     if fermee then return end
     fermee = true
+    if not chargementTermine then
+        chargementAnnule = true
+        table.clear(restaurationsEnAttente)
+        signalFinChargement:Fire()
+    end
     local interface = gui
     pcall(function()
         if interface then interface.Enabled = false end
@@ -6753,7 +6893,7 @@ end)
 		local NOIR = Color3.fromRGB(3, 4, 8)
 		local BLANC = Color3.fromRGB(246, 244, 247)
 		local GRIS = Color3.fromRGB(145, 145, 158)
-		local fini, passer = false, false
+		local fini = false
 		local connexionsIntro = {}
 		local objets = {}
 
@@ -7026,26 +7166,6 @@ end)
 			TextXAlignment = Enum.TextXAlignment.Right,
 			ZIndex = 906,
 		})
-		local passerTexte = label(scene, {
-			AnchorPoint = Vector2.new(0.5, 0),
-			Position = UDim2.new(0.5, 0, 0, 369),
-			Size = UDim2.new(1, -20, 0, 14),
-			Text = "APPUYER POUR PASSER",
-			Font = Enum.Font.GothamBold,
-			TextSize = 8,
-			TextColor3 = Color3.fromRGB(115, 110, 122),
-			TextXAlignment = Enum.TextXAlignment.Center,
-			ZIndex = 906,
-		})
-
-		local connexion = UserInputService.InputBegan:Connect(function(input)
-			if input.UserInputType == Enum.UserInputType.Keyboard
-				or input.UserInputType == Enum.UserInputType.MouseButton1
-				or input.UserInputType == Enum.UserInputType.Touch then
-				passer = true
-			end
-		end)
-		task.delay(10, function() passer = true end)
 
 		local function progression(v, titreStatut, sousTexte)
 			v = math.clamp(v, 0, 1)
@@ -7056,7 +7176,7 @@ end)
 		end
 		local function pause(duree)
 			local debut = os.clock()
-			while not passer and not fermee and os.clock() - debut < duree do
+			while not fermee and os.clock() - debut < duree do
 				task.wait(0.025)
 			end
 		end
@@ -7108,23 +7228,19 @@ end)
 		}
 		local precedent = 0
 		for _, etape in ipairs(etapes) do
-			if passer or fermee then break end
+			if fermee then break end
 			progression(etape[1], etape[2], etape[3])
 			local duree = 0.85
 			local debut = os.clock()
-			while not passer and not fermee and os.clock() - debut < duree do
+			while not fermee and os.clock() - debut < duree do
 				local a = math.clamp((os.clock() - debut) / duree, 0, 1)
 				pourcentage.Text = string.format("%02d%%", math.floor((precedent + (etape[1] - precedent) * a) * 100 + 0.5))
 				task.wait(0.025)
 			end
 			precedent = etape[1]
 		end
-		if passer and not fermee then
-			progression(1, "ACCÈS AUTORISÉ", "Ouverture du menu...")
-		end
 		pause(0.3)
 		fini = true
-		deconnecter(connexion)
 		tw(scene, {GroupTransparency = 1, Position = UDim2.fromScale(0.5, 0.47)}, 0.55, Enum.EasingStyle.Quint)
 		tw(voile, {BackgroundTransparency = 1}, 0.6)
 		tw(fondRouge, {BackgroundTransparency = 1}, 0.55)
@@ -7147,8 +7263,14 @@ end)
 			tw(cadre, {GroupTransparency = (100 - opaciteFenetre) / 100}, 0.4)
 		end)
 	end
-    -- Le chargement est terminé : les callbacks et contrôles du script peuvent agir.
-    chargementTermine = true
+    -- La barrière ne s'ouvre qu'après la fin de l'intro et les restaurations différées.
+    if not fermee then
+        terminerChargement()
+    else
+        chargementAnnule = true
+        table.clear(restaurationsEnAttente)
+        signalFinChargement:Fire()
+    end
 end)()
 do
 	DIAG.derniereHeartbeat = os.clock()
