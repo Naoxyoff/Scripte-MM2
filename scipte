@@ -343,13 +343,18 @@ end
 local flyControl
 local stopperEmoteActuelle = nil
 do
-local VITESSE_HORIZONTALE_MAX = 120
-local VITESSE_CHUTE_MAX = 450
-local ROTATION_MAX = 60
-local DISTANCE_RETOUR = 15
-local PAS_POSITION_SURE = 0.25
+-- Seuils anti-fling : assez hauts pour ne pas bloquer les mouvements normaux.
+local VITESSE_HORIZONTALE_MAX = 85
+local VITESSE_MONTEE_MAX = 110
+local VITESSE_CHUTE_MAX = 280
+local ROTATION_MAX = 45
+local VITESSE_DEPLACEMENT_MAX = 100
+local DISTANCE_RETOUR = 12
+local PAS_POSITION_SURE = 0.20
 local derniereSure = nil
 local derniereMaj = 0
+local dernierePositionControle = nil
+local dernierTempsControlePosition = 0
 local suivis = {}
 local joueursSurveilles = setmetatable({}, { __mode = "k" })
 local function desactiverPiece(info, p)
@@ -436,6 +441,8 @@ local function nouveauPersonnage(perso)
 	local h = perso:WaitForChild("Humanoid", 10)
 	if not r or not h or joueur.Character ~= perso then return end
 	racine, humanoide = r, h
+	dernierePositionControle = r.Position
+	dernierTempsControlePosition = os.clock()
 	if actif then derniereSure = r.CFrame end
 end
 local debutVieStats = nil
@@ -483,12 +490,16 @@ function definirActif(valeur)
 		derniereMaj = os.clock()
 	else
 		restaurerCollisions()
+		dernierePositionControle = nil
+		dernierTempsControlePosition = 0
 	end
 end
 reinitialiserAntiFling = function()
 	if actif then
 		derniereSure = racine and racine.CFrame or nil
 		derniereMaj = os.clock()
+		dernierePositionControle = racine and racine.Position or nil
+		dernierTempsControlePosition = derniereMaj
 	end
 end
 local prochainControleCollisionsAntiFling = 0
@@ -511,33 +522,50 @@ connecter(RunService.Stepped, function()
 		or etat == Enum.HumanoidStateType.Dead
 		or etat == Enum.HumanoidStateType.FallingDown
 		or etat == Enum.HumanoidStateType.Ragdoll then
+		dernierePositionControle = racine.Position
+		dernierTempsControlePosition = maintenant
 		return
 	end
 	if flingActif or (flyControl and (flyControl.flyOn or flyControl.farmActif or flyControl.suiviActif)) then
 		derniereSure = racine.CFrame
-		derniereMaj = os.clock()
+		derniereMaj = maintenant
+		dernierePositionControle = racine.Position
+		dernierTempsControlePosition = maintenant
 		return
 	end
+
 	local vel = racine.AssemblyLinearVelocity
-	local vitesseHorizontale = Vector3.new(vel.X, 0, vel.Z).Magnitude
-	local montee = vel.Y
-	local chute = -vel.Y
-	if vitesseHorizontale > VITESSE_HORIZONTALE_MAX
-		or montee > VITESSE_HORIZONTALE_MAX
-		or chute > VITESSE_CHUTE_MAX
-		or racine.AssemblyAngularVelocity.Magnitude > ROTATION_MAX then
+	local velAngulaire = racine.AssemblyAngularVelocity
+	local vitesseHorizontale2 = vel.X * vel.X + vel.Z * vel.Z
+	local mouvementSuspect = vitesseHorizontale2 > VITESSE_HORIZONTALE_MAX * VITESSE_HORIZONTALE_MAX
+		or vel.Y > VITESSE_MONTEE_MAX
+		or vel.Y < -VITESSE_CHUTE_MAX
+		or velAngulaire.Magnitude > ROTATION_MAX
+
+	-- Détecte aussi les téléportations/impulsions rapides même si la vélocité
+	-- a déjà été partiellement amortie entre deux contrôles.
+	local positionActuelle = racine.Position
+	local dtPosition = maintenant - dernierTempsControlePosition
+	if dernierePositionControle and dtPosition >= 0.01 and dtPosition <= 0.25 then
+		local delta = positionActuelle - dernierePositionControle
+		if delta:Dot(delta) > (VITESSE_DEPLACEMENT_MAX * dtPosition) ^ 2 then
+			mouvementSuspect = true
+		end
+	end
+	dernierePositionControle = positionActuelle
+	dernierTempsControlePosition = maintenant
+
+	if mouvementSuspect then
 		racine.AssemblyLinearVelocity = Vector3.zero
 		racine.AssemblyAngularVelocity = Vector3.zero
-		if derniereSure and (racine.Position - derniereSure.Position).Magnitude > DISTANCE_RETOUR then
+		if derniereSure and (positionActuelle - derniereSure.Position).Magnitude > DISTANCE_RETOUR then
 			racine.CFrame = derniereSure
+			dernierePositionControle = derniereSure.Position
 		end
-	else
-		local t = os.clock()
-		if t - derniereMaj >= PAS_POSITION_SURE
-			and humanoide.FloorMaterial ~= Enum.Material.Air then
-			derniereSure = racine.CFrame
-			derniereMaj = t
-		end
+	elseif maintenant - derniereMaj >= PAS_POSITION_SURE
+		and humanoide.FloorMaterial ~= Enum.Material.Air then
+		derniereSure = racine.CFrame
+		derniereMaj = maintenant
 	end
 end)
 end
