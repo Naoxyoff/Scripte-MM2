@@ -143,20 +143,28 @@ local function estSonMort(objet)
     return nom == "died" or nom == "death" or string.find(id, "uuh", 1, true) ~= nil
 end
 do
-local connexionsSilenceMort = {}
+local connexionsSilenceMort = setmetatable({}, { __mode = "k" })
 local function couperSonMort(objet)
-
     if resetAutoSilencieuxActif and estSonMort(objet) then
         pcall(function() objet.Volume = 0; objet:Stop() end)
     end
 end
 local function appliquerSilenceMort(personnage)
     if not personnage then return end
-    local connexion = connecter(personnage.DescendantAdded, couperSonMort)
-    table.insert(connexionsSilenceMort, connexion)
+    local ancienne = connexionsSilenceMort[personnage]
+    if ancienne then deconnecter(ancienne) end
+    connexionsSilenceMort[personnage] = connecter(personnage.DescendantAdded, couperSonMort)
+end
+local function retirerSilenceMort(personnage)
+    local connexion = personnage and connexionsSilenceMort[personnage]
+    if connexion then
+        deconnecter(connexion)
+        connexionsSilenceMort[personnage] = nil
+    end
 end
 if joueur.Character then appliquerSilenceMort(joueur.Character) end
 connecter(joueur.CharacterAdded, appliquerSilenceMort)
+connecter(joueur.CharacterRemoving, retirerSilenceMort)
 end
 local NOM_CONFIG = "tenebres_mm2_preferences.json"
 local pages = {}
@@ -4312,7 +4320,7 @@ local function creerEntree(autre)
     connecter(bTPA.MouseEnter, function() tw(bTPA, { BackgroundTransparency = 0.2 }, 0.12) end)
     connecter(bTPA.MouseLeave, function() tw(bTPA, { BackgroundTransparency = 0 }, 0.12) end)
     connecter(bTPA.Activated, function() teleporterVers(autre) end)
-    entrees[autre] = { carte = c, sub = sub, titre = titre }
+    entrees[autre] = { carte = c, sub = sub, titre = titre, roleTexte = nil, roleCouleur = nil, titrePosition = nil }
 	    local bFling = creer("TextButton", {
         Size = UDim2.fromOffset(70, 28), Position = UDim2.new(1, -162, 0.5, -14),
         BackgroundColor3 = Color3.fromRGB(220, 30, 50), Text = "FLING", TextColor3 = COL.BLANC,
@@ -4338,14 +4346,20 @@ lancerTache(function()
         for autre, e in pairs(entrees) do
             if e.sub and e.sub.Parent then
                 local role = rolesParJoueur[autre]
-                if role and role ~= "innocent" then
-                    e.sub.Text = NOMS_ROLES[role]
-                    e.sub.TextColor3 = couleurRole(role)
-                    if e.titre then e.titre.Position = UDim2.fromOffset(56, 10) end
-                else
-                    e.sub.Text = ""
-                    e.sub.TextColor3 = COL.MUET
-                    if e.titre then e.titre.Position = UDim2.fromOffset(56, 19) end
+                local texteRole = (role and role ~= "innocent") and (NOMS_ROLES[role] or "") or ""
+                local couleur = texteRole ~= "" and couleurRole(role) or COL.MUET
+                local positionTitre = texteRole ~= "" and 10 or 19
+                if e.roleTexte ~= texteRole then
+                    e.sub.Text = texteRole
+                    e.roleTexte = texteRole
+                end
+                if e.roleCouleur ~= couleur then
+                    e.sub.TextColor3 = couleur
+                    e.roleCouleur = couleur
+                end
+                if e.titre and e.titrePosition ~= positionTitre then
+                    e.titre.Position = UDim2.fromOffset(56, positionTitre)
+                    e.titrePosition = positionTitre
                 end
             end
         end
@@ -4603,6 +4617,7 @@ local MOTS_EXCLUS = { "gun", "knife", "couteau", "pistolet", "tool", "display", 
 local TAILLE_MAX_PIECE = 6
 local MAX_INDEX = 1000
 local piecesConnues, piecesListe, avaitTI = {}, {}, {}
+local touchTransmitterPresent = {}
 local piecesVivantes = 0
 local constructionIndex = false
 local function nomValide(nom)
@@ -4635,14 +4650,24 @@ local function estPiece(obj)
 end
 local function ajouterPiece(obj)
 	if piecesConnues[obj] then
-		if not avaitTI[obj] and obj:FindFirstChildOfClass("TouchTransmitter") then avaitTI[obj] = true end
+		-- Rafraîchit une seule fois lors d'un nouvel indexage (notamment après
+		-- une désactivation où les événements Workspace ne sont plus écoutés).
+		local transmetteur = obj:FindFirstChildOfClass("TouchTransmitter")
+		if avaitTI[obj] then
+			touchTransmitterPresent[obj] = transmetteur ~= nil
+		elseif transmetteur then
+			avaitTI[obj] = true
+			touchTransmitterPresent[obj] = true
+		end
 		return false
 	end
 	if piecesVivantes >= MAX_INDEX then return false end
 	if dansPersonnage(obj) then return false end
 	if not estPiece(obj) then return false end
 	piecesConnues[obj] = true
-	avaitTI[obj] = obj:FindFirstChildOfClass("TouchTransmitter") ~= nil
+	local transmetteur = obj:FindFirstChildOfClass("TouchTransmitter")
+	avaitTI[obj] = transmetteur ~= nil
+	touchTransmitterPresent[obj] = transmetteur ~= nil
 	piecesVivantes = piecesVivantes + 1
 	piecesListe[#piecesListe + 1] = obj
 	return true
@@ -4683,15 +4708,30 @@ local function connecterIndexWorkspace()
 			if candidatPiece(obj) then mettreEnFile(obj) end
 		elseif obj:IsA("TouchTransmitter") then
 			local p = obj.Parent
-			if p and candidatPiece(p) then mettreEnFile(obj) end
+			if p and candidatPiece(p) then
+				if piecesConnues[p] then
+					avaitTI[p] = true
+					touchTransmitterPresent[p] = true
+				end
+				mettreEnFile(obj)
+			end
 		end
 	end)
 	connexionIndexSuppression = connecter(workspace.DescendantRemoving, function(obj)
-		if not armee or not piecesConnues[obj] then return end
+		if not armee then return end
+		if obj:IsA("TouchTransmitter") then
+			local parent = obj.Parent
+			if parent and piecesConnues[parent] then
+				touchTransmitterPresent[parent] = false
+			end
+			return
+		end
+		if not piecesConnues[obj] then return end
 		task.defer(function()
 			if obj:IsDescendantOf(workspace) or not piecesConnues[obj] then return end
 			piecesConnues[obj] = nil
 			avaitTI[obj] = nil
+			touchTransmitterPresent[obj] = nil
 			piecesVivantes = math.max(0, piecesVivantes - 1)
 			if succes and racine and racine.Parent and not mancheTerminee and not latchFinManche
 				and (obj.Position - racine.Position).Magnitude < 14 then
@@ -4786,21 +4826,25 @@ local function compacterListe()
 	piecesListe = neuve
 end
 local function recoltable(p)
-	if not piecesConnues[p] or not p:IsDescendantOf(workspace) then return false end
-	if avaitTI[p] and not p:FindFirstChildOfClass("TouchTransmitter") then return false end
+	-- L'index Workspace et les événements DescendantAdded/Removing maintiennent
+	-- ces états : éviter les recherches répétées pour chaque pièce à chaque tick.
+	if not piecesConnues[p] or not p.Parent then return false end
+	if avaitTI[p] and touchTransmitterPresent[p] ~= true then return false end
 	return true
 end
 local function analyser(position)
-	local n, dMin = 0, math.huge
+	local n, dMinCarre = 0, math.huge
 	for i = 1, #piecesListe do
 		local p = piecesListe[i]
 		if recoltable(p) then
 			n = n + 1
-			local d = (p.Position - position).Magnitude
-			if d < dMin then dMin = d end
+			local delta = p.Position - position
+			local distanceCarree = delta:Dot(delta)
+			if distanceCarree < dMinCarre then dMinCarre = distanceCarree end
 		end
 	end
-	restantes, distanceMin = n, dMin
+	restantes = n
+	distanceMin = dMinCarre < math.huge and math.sqrt(dMinCarre) or math.huge
 end
 local dangersCache, tDangers = nil, 0
 local function positionMurder()
@@ -4827,10 +4871,12 @@ local function positionMurder()
 	dangersCache = #liste > 0 and liste or nil
 	return dangersCache
 end
+local RAYON_MURDER_CARRE = RAYON_MURDER * RAYON_MURDER
 local function pieceDangereuse(pp, dangers)
 	if not dangers then return false end
 	for i = 1, #dangers do
-		if (pp - dangers[i]).Magnitude < RAYON_MURDER then return true end
+		local delta = pp - dangers[i]
+		if delta:Dot(delta) < RAYON_MURDER_CARRE then return true end
 	end
 	return false
 end
@@ -4946,8 +4992,8 @@ local function pieceVolee(piece, pos, farmeurs)
 end
 local function choisirCible(position, murderPos)
 	local t = os.clock()
-	local meilleure, meilleureD = nil, math.huge
-	local meilleureDifferee, meilleureDiffereeD = nil, math.huge
+	local meilleure, meilleureDCarree = nil, math.huge
+	local meilleureDifferee, meilleureDiffereeScore = nil, math.huge
 	local farmeurs = farmCfg.eviterFarmeurs and positionsFarmeurs() or {}
 	for i = 1, #piecesListe do
 		local p = piecesListe[i]
@@ -4957,24 +5003,23 @@ local function choisirCible(position, murderPos)
 			local pp = p.Position
 			if math.abs(pp.Y - referenceY) <= farmCfg.margeVerticale
 				and not pieceDangereuse(pp, murderPos) then
-
+				local delta = pp - position
+				local distanceCarree = delta:Dot(delta)
 				local volee = pieceVolee(p, position, farmeurs)
-				local d = (pp - position).Magnitude
-				if enDelai then d = d + 12 end
-				if volee then d = d + 12 end
-				if enDelai or volee then
-
-					if d < meilleureDiffereeD then
-						meilleureDifferee, meilleureDiffereeD = p, d
+				local penalite = (enDelai and 12 or 0) + (volee and 12 or 0)
+				if penalite == 0 then
+					if distanceCarree < meilleureDCarree then
+						meilleure, meilleureDCarree = p, distanceCarree
 					end
-				elseif d < meilleureD then
-					meilleure, meilleureD = p, d
+				elseif meilleureDiffereeScore > penalite
+					and distanceCarree < (meilleureDiffereeScore - penalite) ^ 2 then
+					meilleureDifferee = p
+					meilleureDiffereeScore = math.sqrt(distanceCarree) + penalite
 				end
-            end
-        end
-    end
-
-    return meilleure or meilleureDifferee
+			end
+		end
+	end
+	return meilleure or meilleureDifferee
 end
 local lobbyCentreCache = nil
 local prochainCalculLobby = 0
@@ -5040,6 +5085,7 @@ local function creerMaintien(r)
 end
 local etatHumanoideAvantFarm = nil
 local sonsPasFarm, volumesPasFarm, connPasFarm = {}, {}, nil
+local prochainControleSonsFarm = 0
 local function couperPasFarm(perso)
 	if not perso then return end
 	if not connPasFarm then
@@ -5058,6 +5104,12 @@ local function couperPasFarm(perso)
 		for _, o in ipairs(perso:GetDescendants()) do ajouter(o) end
 		connPasFarm = connecter(perso.DescendantAdded, ajouter)
 	end
+	-- Le scan de maintien n'a pas besoin de tourner à 90 Hz : les nouveaux sons
+	-- sont coupés immédiatement par DescendantAdded, puis les sons connus sont
+	-- recontrôlés à 8 Hz pour neutraliser ceux relancés par le jeu.
+	local maintenant = os.clock()
+	if maintenant < prochainControleSonsFarm then return end
+	prochainControleSonsFarm = maintenant + 0.12
 	for i = 1, #sonsPasFarm do
 		local s = sonsPasFarm[i]
 		if s.Parent and (s.Volume ~= 0 or s.Playing) then
@@ -5073,6 +5125,7 @@ local function restaurerPasFarm()
 		end
 	end
 	sonsPasFarm, volumesPasFarm = {}, {}
+	prochainControleSonsFarm = 0
 end
 local function figerAnimations(perso, h)
 	couperPasFarm(perso)
@@ -5811,13 +5864,19 @@ lancerTache(function()
 		local secondes = debutFarm and math.max(0, math.floor(os.clock() - debutFarm)) or 0
 		local tempsEstimation = math.max(secondes, 270)
         local heures = tempsEstimation / 3600
-		ligneEtat.Text = "État : " .. etatTexte
-		ligneRestantes.Text = string.format("Pièces restantes sur la map : %d", restantes)
-		ligne1.Text = string.format("Pièces par heure : %d", math.floor(recolteesSession / heures + 0.5))
-		ligne2.Text = string.format("Pièces récoltées (session) : %d", recolteesSession)
-		ligne3.Text = string.format("Pièces récoltées (exécution) : %d", recolteesTotal)
-		ligne4.Text = string.format("Farm depuis : %02d:%02d:%02d",
+		local texteEtat = "État : " .. etatTexte
+		local texteRestantes = string.format("Pièces restantes sur la map : %d", restantes)
+		local texteRythme = string.format("Pièces par heure : %d", math.floor(recolteesSession / heures + 0.5))
+		local texteSession = string.format("Pièces récoltées (session) : %d", recolteesSession)
+		local texteTotal = string.format("Pièces récoltées (exécution) : %d", recolteesTotal)
+		local texteTemps = string.format("Farm depuis : %02d:%02d:%02d",
 			math.floor(secondes / 3600), math.floor(secondes / 60) % 60, secondes % 60)
+		if ligneEtat.Text ~= texteEtat then ligneEtat.Text = texteEtat end
+		if ligneRestantes.Text ~= texteRestantes then ligneRestantes.Text = texteRestantes end
+		if ligne1.Text ~= texteRythme then ligne1.Text = texteRythme end
+		if ligne2.Text ~= texteSession then ligne2.Text = texteSession end
+		if ligne3.Text ~= texteTotal then ligne3.Text = texteTotal end
+		if ligne4.Text ~= texteTemps then ligne4.Text = texteTemps end
 		task.wait(0.5)
 	end
 end)
