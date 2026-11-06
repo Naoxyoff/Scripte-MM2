@@ -3,9 +3,24 @@ local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local Lighting = game:GetService("Lighting")
+local HttpService = game:GetService("HttpService")
+local StatsService = game:GetService("Stats")
 
 local LOGO_T_IMAGE = "rbxassetid://0"
 local LOGO_T_READY = false
+local LOGO_T_TEXTES = {}
+local LOGO_T_IMAGES = {}
+local function enregistrerLogoT(texteLogo, imageLogo)
+    if texteLogo then LOGO_T_TEXTES[#LOGO_T_TEXTES + 1] = texteLogo end
+    if imageLogo then LOGO_T_IMAGES[#LOGO_T_IMAGES + 1] = imageLogo end
+    if LOGO_T_READY then
+        if texteLogo and texteLogo.Parent then texteLogo.Visible = false end
+        if imageLogo and imageLogo.Parent then
+            imageLogo.Image = LOGO_T_IMAGE
+            imageLogo.Visible = true
+        end
+    end
+end
 do
 local LOGO_T_URL = "https://i.ibb.co/M5nfp8VT/logo-T-rouge-transparent.png"
 local LOGO_T_FILE = "tenebres_mm2_logo_T_rouge.png"
@@ -36,7 +51,27 @@ local function chargerLogoTRouge()
     end
     return false
 end
-LOGO_T_READY = chargerLogoTRouge()
+-- Le téléchargement réseau ne doit jamais bloquer la construction du menu.
+task.spawn(function()
+    local ok, pret = pcall(chargerLogoTRouge)
+    if not ok or not pret then return end
+    LOGO_T_READY = true
+    for i = #LOGO_T_TEXTES, 1, -1 do
+        local objet = LOGO_T_TEXTES[i]
+        if objet and objet.Parent then objet.Visible = false else table.remove(LOGO_T_TEXTES, i) end
+    end
+    for i = #LOGO_T_IMAGES, 1, -1 do
+        local objet = LOGO_T_IMAGES[i]
+        if objet and objet.Parent then
+            objet.Image = LOGO_T_IMAGE
+            objet.Visible = true
+        else
+            table.remove(LOGO_T_IMAGES, i)
+        end
+    end
+    table.clear(LOGO_T_TEXTES)
+    table.clear(LOGO_T_IMAGES)
+end)
 end
 local VirtualUser = game:GetService("VirtualUser")
 local joueur = Players.LocalPlayer
@@ -76,7 +111,12 @@ local function lancerTache(fonction, ...)
     local args = table.pack(...)
     task.spawn(function()
         if not attendreChargement() then return end
-        fonction(table.unpack(args, 1, args.n))
+        local ok, erreur = xpcall(function()
+            fonction(table.unpack(args, 1, args.n))
+        end, debug.traceback)
+        if not ok then
+            warn("[Les Ténèbres] Tâche interrompue : " .. tostring(erreur))
+        end
     end)
 end
 
@@ -171,7 +211,7 @@ local pages = {}
 local configChargee = {}
 pcall(function()
     if isfile and readfile and isfile(NOM_CONFIG) then
-        local decode = game:GetService("HttpService"):JSONDecode(readfile(NOM_CONFIG))
+        local decode = HttpService:JSONDecode(readfile(NOM_CONFIG))
         if type(decode) == "table" then configChargee = decode end
     end
 end)
@@ -185,7 +225,7 @@ local statsMM2 = {
 }
 pcall(function()
     if isfile and readfile and isfile(FICHIER_STATS) then
-        local donnees = game:GetService("HttpService"):JSONDecode(readfile(FICHIER_STATS))
+        local donnees = HttpService:JSONDecode(readfile(FICHIER_STATS))
         if type(donnees) == "table" then
             statsMM2.piecesTotal = math.max(0, tonumber(donnees.piecesTotal) or 0)
             statsMM2.manches = math.max(0, tonumber(donnees.manches) or 0)
@@ -209,7 +249,7 @@ end)
 local function sauvegarderStatsMM2()
     pcall(function()
         if type(writefile) ~= "function" then return end
-        writefile(FICHIER_STATS, game:GetService("HttpService"):JSONEncode(statsMM2))
+        writefile(FICHIER_STATS, HttpService:JSONEncode(statsMM2))
     end)
 end
 local statsSale, prochaineSauvStats = false, 0
@@ -277,7 +317,7 @@ local function sauvegarderConfig(extra)
             for k, v in pairs(extra) do donnees[k] = v end
         end
         donnees.version = 5
-        local http = game:GetService("HttpService")
+        local http = HttpService
         local json = http:JSONEncode(donnees)
         writefile(NOM_CONFIG, json)
         if type(readfile) == "function" then
@@ -2384,6 +2424,7 @@ local logoImageEntete = creer("ImageLabel", {
     Visible = LOGO_T_READY,
     ZIndex = texteIcone.ZIndex,
 }, icone)
+enregistrerLogoT(texteIcone, logoImageEntete)
 local imageIcone = creer("ImageLabel", {
     Size = UDim2.new(1, -6, 1, -6),
     Position = UDim2.fromOffset(3, 3),
@@ -3030,6 +3071,7 @@ local logoImageReduit = creer("ImageLabel", {
     Visible = LOGO_T_READY,
     ZIndex = texteIconeB.ZIndex,
 }, iconeB)
+enregistrerLogoT(texteIconeB, logoImageReduit)
 
 -- Séparateur vertical fin, comme sur la maquette.
 creer("Frame", {
@@ -3184,7 +3226,7 @@ lancerTache(function()
 		if fpsLabel.Visible then
 			local ping = 0
 			pcall(function()
-				ping = math.floor(game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue())
+				ping = math.floor(StatsService.Network.ServerStatsItem["Data Ping"]:GetValue())
 			end)
 			fpsLabel.Text = string.format("FPS %d · Ping %d ms", math.floor(fpsActuel + 0.5), ping)
 		end
@@ -3197,7 +3239,7 @@ lancerTache(function()
             end
             hudInfos.Text = table.concat(morceaux, "  ·  ")
         end
-		task.wait(0.5)
+		task.wait(0.75)
 	end
 end)
 do
@@ -3643,7 +3685,7 @@ lancerTache(function()
 		lignesInfo[4].Text = infoHeros
 		lignesInfo[5].Text = infoArme
 		majPuces()
-		task.wait(0.75)
+		task.wait(1)
 	end
 end)
 end
@@ -3754,7 +3796,7 @@ local flingVers
     local DECALAGE_ARRIERE   = 1.0
     local INTERVALLE_PING    = 1.0
     local INTERVALLE_ETAT    = 0.1
-    local Stats = game:GetService("Stats")
+    local Stats = StatsService
     local flingEnCours = false
     local jeton = 0
     local function notifier(message, couleur)
@@ -4363,7 +4405,7 @@ lancerTache(function()
                 end
             end
         end
-        task.wait(1)
+        task.wait(1.5)
     end
 end)
 end
@@ -4752,7 +4794,7 @@ mettreEnFile = function(obj)
 		local tete = 1
 		while tete <= #ajoutsEnFile and not fermee and armee and generation == generationIndex do
 			local t0 = os.clock()
-			while tete <= #ajoutsEnFile and os.clock() - t0 < 0.001 and armee and generation == generationIndex do
+			while tete <= #ajoutsEnFile and os.clock() - t0 < 0.003 and armee and generation == generationIndex do
 				local item = ajoutsEnFile[tete]
 				tete = tete + 1
 				fileAjouts[item] = nil
@@ -4806,7 +4848,7 @@ local function construireIndex()
 							pile[#pile + 1] = obj
 						end
 					end
-					if os.clock() - t0 > 0.001 then
+					if os.clock() - t0 > 0.003 then
 						task.wait()
 						t0 = os.clock()
 					end
@@ -5789,7 +5831,7 @@ local function pas(dt)
 	end
 end
 local accumulateurFarm = 0
-local INTERVALLE_TICK_FARM = 1 / 90
+local INTERVALLE_TICK_FARM = 1 / 60
 connecter(RunService.Heartbeat, function(dt)
 	if fermee or not armee then
 		accumulateurFarm = 0
@@ -5877,7 +5919,7 @@ lancerTache(function()
 		if ligne2.Text ~= texteSession then ligne2.Text = texteSession end
 		if ligne3.Text ~= texteTotal then ligne3.Text = texteTotal end
 		if ligne4.Text ~= texteTemps then ligne4.Text = texteTemps end
-		task.wait(0.5)
+		task.wait(1)
 	end
 end)
 end
@@ -6197,7 +6239,7 @@ connecter(RunService.RenderStepped, function(dt)
     if t - dernierTextePerf > 0.5 then
         dernierTextePerf = t
         local ping = 0
-        pcall(function() ping = game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue() end)
+        pcall(function() ping = StatsService.Network.ServerStatsItem["Data Ping"]:GetValue() end)
         textePerf.Text = string.format("FPS : %d  ·  Ping : %d ms  ·  Frame : %.1f ms", fps, math.floor(ping + 0.5), dt * 1000)
     end
 end)
@@ -6301,7 +6343,7 @@ local FICHIER_FAVORIS = "tenebres_mm2_favoris.json"
 local favoris = {}
 pcall(function()
     if isfile and readfile and isfile(FICHIER_FAVORIS) then
-        local donnees = game:GetService("HttpService"):JSONDecode(readfile(FICHIER_FAVORIS))
+        local donnees = HttpService:JSONDecode(readfile(FICHIER_FAVORIS))
         if type(donnees) == "table" then
             for _, nom in ipairs(donnees) do
                 if type(nom) == "string" then favoris[nom] = true end
@@ -6316,7 +6358,7 @@ local function sauvegarderFavoris()
         local liste = {}
         for nom in pairs(favoris) do liste[#liste + 1] = nom end
         table.sort(liste)
-        writefile(FICHIER_FAVORIS, game:GetService("HttpService"):JSONEncode(liste))
+        writefile(FICHIER_FAVORIS, HttpService:JSONEncode(liste))
     end)
     if not ok and not erreurFavorisSignalee then
         erreurFavorisSignalee = true
@@ -6707,7 +6749,7 @@ lancerTache(function()
                 noterEmote("Danse arrêtée (fling / auto farm actif)", COL.ORANGE)
             end
         end
-        task.wait(0.3)
+        task.wait(0.5)
     end
 end)
 end)()
@@ -6717,7 +6759,7 @@ local function installerGun()
     local pageGun = pages["Combat"]
     local DISTANCE_MAX = 1000
     local COOLDOWN_GRAB = 1.5
-    local INTERVALLE_SCAN = 0.25
+    local INTERVALLE_SCAN = 0.5
     local autoGrab = false
     local grabEnCours = false
     local dernierGrab = 0
@@ -7001,7 +7043,7 @@ local function sauvegarderPositionBarre()
         for k, v in pairs(configChargee) do donnees[k] = v end
         for k, v in pairs(configRuntime) do donnees[k] = v end
         donnees.version = 5
-        writefile(NOM_CONFIG, game:GetService("HttpService"):JSONEncode(donnees))
+        writefile(NOM_CONFIG, HttpService:JSONEncode(donnees))
         configChargee = donnees
     end)
 end
@@ -7180,7 +7222,7 @@ end)
 		}, fondRouge))
 
 		local poussiere = {}
-		for i = 1, 16 do
+		for i = 1, 10 do
 			local point = frame(voile, {
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				Position = UDim2.fromScale(math.random(), math.random()),
@@ -7307,6 +7349,7 @@ end)
             Visible = LOGO_T_READY,
             ZIndex = 907,
         }, embleme))
+        enregistrerLogoT(lettre, logoImageChargement)
 
 		local titre = label(scene, {
 			AnchorPoint = Vector2.new(0.5, 0),
