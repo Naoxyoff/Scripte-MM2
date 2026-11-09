@@ -1537,19 +1537,39 @@ calculerRoles = function()
 	end
 
 	local listeJoueurs = Players:GetPlayers()
+	local vuEnMap = flyControl.vuEnMap
+	if not vuEnMap then vuEnMap = {}; flyControl.vuEnMap = vuEnMap end
+
+	-- Mort = Humanoid à 0 PV. Un personnage absent (téléportation, rechargement) n'est PAS une mort.
+	local function estMort(p)
+		local perso = p and p.Character
+		local hum = perso and perso:FindFirstChildOfClass("Humanoid")
+		return hum ~= nil and hum.Health <= 0
+	end
+
+	-- RÈGLE : un rôle détecté (Murder / Sheriff / Héros) est conservé jusqu'à la mort de
+	-- son porteur. Ensuite il redevient innocent jusqu'à la prochaine manche.
+	for _, p in ipairs(listeJoueurs) do
+		if estMort(p) and not joueursElimines[p.Name] then
+			joueursElimines[p.Name] = true
+			rolesServeur[p.Name] = nil
+			persoDuRole[p.Name] = nil
+			if p == herosOrigine then herosOrigine = nil end
+		end
+	end
+
 	local porteurs = {}
 	for _, p in ipairs(listeJoueurs) do
-		if joueurVivant(p) and not joueursElimines[p.Name] and aOutil(p, "Gun")
-			and not (p.Character and estDansLobby(p.Character)) then
+		if p.Character and not estMort(p) and not joueursElimines[p.Name] and aOutil(p, "Gun")
+			and not estDansLobby(p.Character) then
 			porteurs[#porteurs + 1] = p
 		end
 	end
 
 	-- Murder et Sheriff proviennent exclusivement du rôle transmis par le serveur.
-	-- Les outils ne servent jamais à deviner ou remplacer ces deux rôles.
 	local murder = nil
 	for _, p in ipairs(listeJoueurs) do
-		if joueurVivant(p) and not joueursElimines[p.Name] and rolesServeur[p.Name] == "murder" then
+		if not joueursElimines[p.Name] and rolesServeur[p.Name] == "murder" then
 			murder = p
 			break
 		end
@@ -1566,10 +1586,11 @@ calculerRoles = function()
 
 	local gunDropPresent = flyControl.trouverGunDrop() ~= nil
 	if gunDropPresent then gunDropVu = true end
-	local sheriffMort = sheriffOrigine ~= nil and (joueursElimines[sheriffOrigine.Name] == true or not joueurVivant(sheriffOrigine))
+	local sheriffMort = sheriffOrigine ~= nil and (joueursElimines[sheriffOrigine.Name] == true
+		or estMort(sheriffOrigine) or sheriffOrigine.Parent == nil)
 
-	-- Le Héros est mémorisé au premier ramassage du pistolet après la mort du Sheriff.
-	-- Il conserve ce rôle même si l'outil est momentanément déplacé, jusqu'à sa mort.
+	-- Le Héros est mémorisé au premier ramassage du pistolet après la mort du Sheriff,
+	-- et le garde jusqu'à sa propre mort.
 	if sheriffMort and not herosOrigine then
 		for _, p in ipairs(porteurs) do
 			if p ~= sheriffOrigine and p ~= murder then
@@ -1578,7 +1599,7 @@ calculerRoles = function()
 			end
 		end
 	end
-	if herosOrigine and (joueursElimines[herosOrigine.Name] or not joueurVivant(herosOrigine)) then
+	if herosOrigine and (joueursElimines[herosOrigine.Name] or estMort(herosOrigine) or herosOrigine.Parent == nil) then
 		herosOrigine = nil
 	end
 
@@ -1597,8 +1618,7 @@ calculerRoles = function()
 		gunDropVu = false
 	end
 
-	local sherif = (sheriffOrigine and joueurVivant(sheriffOrigine)
-		and not joueursElimines[sheriffOrigine.Name]) and sheriffOrigine or nil
+	local sherif = (sheriffOrigine and not sheriffMort) and sheriffOrigine or nil
 	local heros = herosOrigine
 
 	local nouveau = {}
@@ -1607,58 +1627,29 @@ calculerRoles = function()
 		local r = "innocent"
 		local personnage = p.Character
 		local hum = personnage and personnage:FindFirstChildOfClass("Humanoid")
-		local personnageCharge = hum ~= nil
-		local vivant = personnageCharge and hum.Health > 0
 		local srv = rolesServeur[p.Name]
-		local auLobby = personnageCharge and estDansLobby(personnage)
+		local auLobby = hum ~= nil and estDansLobby(personnage)
 
-		-- Un rôle serveur est verrouillé sur le joueur et son personnage courant.
-		-- Un respawn après élimination ne restaure jamais le rôle de la manche.
-		if srv and srv ~= "innocent" and not joueursElimines[p.Name] then
-			local ref = persoDuRole[p.Name]
-			if personnageCharge and vivant then
-				if not ref then
-					persoDuRole[p.Name] = { perso = personnage, role = srv }
-				elseif ref.role ~= srv then
-					persoDuRole[p.Name] = { perso = personnage, role = srv }
-				elseif ref.perso ~= personnage then
-					if auLobby then
-						persoDuRole[p.Name] = { perso = personnage, role = srv }
-					else
-						joueursElimines[p.Name] = true
-						rolesServeur[p.Name] = nil
-						srv = nil
-					end
-				end
-			end
-		elseif not srv then
-			persoDuRole[p.Name] = nil
+		-- Le lobby n'efface le rôle que si le joueur a déjà été vu en map pendant cette manche
+		-- (retour au lobby = fin de manche). Avant la téléportation, le rôle est déjà affiché.
+		if srv and srv ~= "innocent" and hum ~= nil and not auLobby then
+			vuEnMap[p.Name] = generationManche
 		end
+		local retourLobby = auLobby and vuEnMap[p.Name] == generationManche
 
-		if joueursElimines[p.Name] or (personnageCharge and not vivant) then
-			if personnageCharge and not vivant then
-				joueursElimines[p.Name] = true
-				rolesServeur[p.Name] = nil
-				persoDuRole[p.Name] = nil
-				if p == herosOrigine then herosOrigine = nil end
-			end
+		if joueursElimines[p.Name] or retourLobby then
 			r = "innocent"
-		elseif auLobby and not (flyControl.tRoleRecu[p.Name] and os.clock() - flyControl.tRoleRecu[p.Name] < 8) then
-			r = "innocent"
-		elseif p == murder and vivant then
+		elseif p == murder then
 			r = "murder"
-		elseif p == sheriffOrigine and vivant and not sheriffMort then
+		elseif p == sheriffOrigine and not sheriffMort then
 			r = "sherif"
-		elseif p == herosOrigine and vivant then
+		elseif p == herosOrigine then
 			r = "heros"
-		elseif srv and srv ~= "innocent" and vivant then
+		elseif srv and srv ~= "innocent" then
 			r = srv
-			srvActif = true
 		end
 
-		if vivant and not joueursElimines[p.Name] and r ~= "innocent" then
-			srvActif = true
-		end
+		if r ~= "innocent" then srvActif = true end
 		nouveau[p] = r
 	end
 	rolesParJoueur = nouveau
@@ -2145,6 +2136,28 @@ local function surveillerArmes(p)
     connecter(p.CharacterAdded, function(c) perso(c) declencherMajImmediate() end)
 end
 flyControl.majVisuelsMaintenant = declencherMajImmediate
+-- Après une téléportation / un rechargement de personnage, le Highlight est détruit avec
+-- l'ancien modèle : on le recrée immédiatement dès que le nouveau corps apparaît,
+-- sans attendre la prochaine boucle.
+connecter(workspace.DescendantAdded, function(o)
+	if fermee or not (rolesActifs or nomsActifs) then return end
+	if o.Name == "HumanoidRootPart" or o:IsA("Humanoid") then
+		local modele = o.Parent
+		local p = modele and Players:GetPlayerFromCharacter(modele)
+		if p and p ~= joueur then
+			task.defer(function()
+				if not fermee then pcall(majVisuel, p) end
+			end)
+		end
+	end
+end)
+connecter(joueur.CharacterAdded, function()
+	for _, d in ipairs({ 0, 0.15, 0.4, 0.8 }) do
+		task.delay(d, function()
+			if not fermee then declencherMajImmediate() end
+		end)
+	end
+end)
 for _, p in ipairs(Players:GetPlayers()) do surveillerArmes(p) end
 connecter(Players.PlayerAdded, surveillerArmes)
 connecter(workspace.DescendantRemoving, function(o)
