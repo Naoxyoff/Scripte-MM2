@@ -1,3 +1,4 @@
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -1343,6 +1344,14 @@ do
 					table.clear(rolesServeur)
 					verrouRoles.murder, verrouRoles.sherif = nil, nil
 					table.clear(joueursElimines)
+					-- Fin de manche : aucun chams (zombie ou classique) ne doit rester affiché,
+					-- et la détection de mode est remise à zéro pour la manche suivante.
+					if flyControl.Z then
+						flyControl.Z.infectionGen = nil
+						flyControl.Z.classiqueGen = nil
+						flyControl.Z.modeCouteau = false
+						for p in pairs(flyControl.Z.halos) do pcall(flyControl.Z.retirer, p) end
+					end
 					for _, p in ipairs(Players:GetPlayers()) do
 						rolesParJoueur[p] = "innocent"
 						local h = halos[p]
@@ -1581,6 +1590,9 @@ calculerRoles = function()
 		sheriffOrigine = nil
 		herosOrigine = nil
 		gunDropVu = false
+		flyControl.Z.infectionGen = nil
+		flyControl.Z.classiqueGen = nil
+		flyControl.Z.modeCouteau = false
 	end
 	if nouvelleMancheAnnoncee then
 		nouvelleMancheAnnoncee = false
@@ -1591,6 +1603,9 @@ calculerRoles = function()
 		gunDropVu = false
 		table.clear(joueursElimines)
 		table.clear(persoDuRole)
+		flyControl.Z.infectionGen = nil
+		flyControl.Z.classiqueGen = nil
+		flyControl.Z.modeCouteau = false
 	end
 
 	if mancheTerminee then
@@ -1910,34 +1925,81 @@ local function attributZombieExplicite(objet)
     return false
 end
 local modeZombieCache, tModeZombie = false, 0
+-- Une manche est « réelle » quand le compte à rebours est terminé : le joueur local n'est
+-- plus au lobby et au moins un autre joueur vivant est en jeu, hors du lobby.
+-- Rien n'est donc verrouillé pendant le lobby ni pendant le compte à rebours.
+local mancheReelleCache, tMancheReelle = false, 0
+local function mancheReelle()
+    local t = os.clock()
+    if t - tMancheReelle < 0.2 then return mancheReelleCache end
+    tMancheReelle = t
+    local resultat = false
+    if not estAuLobbyPourChams() then
+        for _, q in ipairs(Players:GetPlayers()) do
+            if q ~= joueur then
+                local persoQ = q.Character
+                local humQ = persoQ and persoQ:FindFirstChildOfClass("Humanoid")
+                if humQ and humQ.Health > 0 and not estDansLobby(persoQ) then
+                    resultat = true
+                    break
+                end
+            end
+        end
+    end
+    mancheReelleCache = resultat
+    return resultat
+end
 function modeZombie()
     local t = os.clock()
     if t - tModeZombie > 0.5 then
         tModeZombie = t
-        local n = 0
-        for _, q in ipairs(Players:GetPlayers()) do
-            if joueurVivant(q) and not estDansLobby(q.Character) and possedeCouteauZombie(q) then n = n + 1 end
-        end
-        flyControl.Z.nbCouteaux = n
-        for _, role in pairs(rolesServeur) do
-            if role == "sherif" then flyControl.Z.classiqueGen = generationManche break end
-        end
-        -- Infection détectée par les couteaux : 2 couteaux ou plus en partie, sans Sheriff
-        -- classique dans cette manche. Verrouillé pour la manche (le 1er zombie compris).
         local Z = flyControl.Z
-        if n == 0 or Z.classiqueGen == generationManche then
-            Z.infectionGen = nil
-        elseif n >= 2 then
-            Z.infectionGen = generationManche
-        end
-        Z.modeCouteau = Z.infectionGen ~= nil and Z.infectionGen == generationManche
-        local trouve = Z.modeCouteau
-        if not trouve then
+        local precedent = modeZombieCache
+        local trouve = false
+        if mancheReelle() then
+            local n = 0
             for _, q in ipairs(Players:GetPlayers()) do
-                if estZombieOuSurvivant(q) == true then trouve = true break end
+                if joueurVivant(q) and not estDansLobby(q.Character) and possedeCouteauZombie(q) then n = n + 1 end
+            end
+            Z.nbCouteaux = n
+            for _, role in pairs(rolesServeur) do
+                if role == "sherif" then Z.classiqueGen = generationManche break end
+            end
+            -- Infection détectée par les couteaux : 2 couteaux ou plus en partie, sans Sheriff
+            -- classique dans cette manche. Verrouillé pour la manche (le 1er zombie compris).
+            if n == 0 or Z.classiqueGen == generationManche then
+                Z.infectionGen = nil
+            elseif n >= 2 then
+                Z.infectionGen = generationManche
+            end
+            Z.modeCouteau = Z.infectionGen ~= nil and Z.infectionGen == generationManche
+            if Z.classiqueGen == generationManche then
+                -- Un Sheriff existe dans cette manche : c'est du Classic, jamais de chams zombie.
+                trouve = false
+            elseif Z.modeCouteau then
+                trouve = true
+            else
+                -- Indice explicite (équipe zombie / attribut infecté) sans Sheriff connu.
+                for _, q in ipairs(Players:GetPlayers()) do
+                    local persoQ = q.Character
+                    if (q.Team and estNomZombie(q.Team.Name))
+                        or attributZombieExplicite(q) or attributZombieExplicite(persoQ) then
+                        trouve = true
+                        break
+                    end
+                end
             end
         end
         modeZombieCache = trouve
+        if trouve ~= precedent then
+            -- Changement de mode : on purge l'autre système pour éviter tout résidu de couleur.
+            if trouve then
+                for p in pairs(halos) do retirerHalo(p) end
+                for p in pairs(boites) do retirerBoite(p) end
+            else
+                for p in pairs(flyControl.Z.halos) do flyControl.Z.retirer(p) end
+            end
+        end
     end
     return modeZombieCache
 end
@@ -1960,6 +2022,10 @@ local function majChamsZombie(p)
     local h = flyControl.Z.halos[p]
     if not h or not h.Parent or h.Adornee ~= perso then
         flyControl.Z.retirer(p)
+        -- Un Highlight orphelin sur le même modèle ne doit jamais rester (doublon).
+        for _, enfant in ipairs(perso:GetChildren()) do
+            if enfant:IsA("Highlight") and enfant.Name == "ZombieModeHalo" then enfant:Destroy() end
+        end
         h = Instance.new("Highlight")
         h.Name = "ZombieModeHalo"
         h.Adornee = perso
@@ -1990,13 +2056,15 @@ local function majVisuel(joueurCible)
 		distance = (racine.Position - rp.Position).Magnitude
 	end
 
-	-- Chams : vert (innocent) par défaut pour tout le monde, lobby compris.
-	-- Murder / Sheriff / Héros ne prennent leur couleur qu'en manche (joueurs au lobby = vert).
-	local chamsVisibles = rolesActifs
+	-- Chams Classic : visibles aussi dans le lobby et hors manche.
+	-- Les joueurs éliminés gardent la couleur des innocents (vert).
+	-- Le mode Zombie conserve son affichage séparé.
+	local enZombie = flyControl.Z.actif and modeZombie()
+	local chamsPossibles = rolesActifs
 		and not (rp and racine and distance > DISTANCE_MAX_CHAMS)
-	if not chamsVisibles then
+	if not chamsPossibles then
 		retirerHalo(joueurCible)
-	elseif flyControl.Z.actif and modeZombie() then
+	elseif enZombie then
 		retirerHalo(joueurCible)
 		retirerBoite(joueurCible)
 	else
@@ -7837,5 +7905,5 @@ do
 				flyControl.noclipOn and "ON" or "off", actif and "ON" or "off"))
 		end
 		DIAG.msEvts, DIAG.nbEvts = 0, 0
-	end)
+    end)
 end
