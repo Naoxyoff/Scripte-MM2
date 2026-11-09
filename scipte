@@ -1887,6 +1887,11 @@ local function estZombieOuSurvivant(p)
         end
     end
 
+    -- Détection par le couteau : en mode infection, les zombies tiennent un couteau.
+    if flyControl.Z.modeCouteau then
+        return possedeCouteauZombie(p)
+    end
+
     return false
 end
 flyControl.Z.retirer = function(p)
@@ -1917,9 +1922,20 @@ function modeZombie()
         for _, role in pairs(rolesServeur) do
             if role == "sherif" then flyControl.Z.classiqueGen = generationManche break end
         end
-        local trouve = false
-        for _, q in ipairs(Players:GetPlayers()) do
-            if estZombieOuSurvivant(q) == true then trouve = true break end
+        -- Infection détectée par les couteaux : 2 couteaux ou plus en partie, sans Sheriff
+        -- classique dans cette manche. Verrouillé pour la manche (le 1er zombie compris).
+        local Z = flyControl.Z
+        if n == 0 or Z.classiqueGen == generationManche then
+            Z.infectionGen = nil
+        elseif n >= 2 then
+            Z.infectionGen = generationManche
+        end
+        Z.modeCouteau = Z.infectionGen ~= nil and Z.infectionGen == generationManche
+        local trouve = Z.modeCouteau
+        if not trouve then
+            for _, q in ipairs(Players:GetPlayers()) do
+                if estZombieOuSurvivant(q) == true then trouve = true break end
+            end
         end
         modeZombieCache = trouve
     end
