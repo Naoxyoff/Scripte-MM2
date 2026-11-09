@@ -4512,16 +4512,21 @@ lancerTache(function()
             local modeZ = (flyControl.Z.mode and flyControl.Z.mode()) == true
             flyControl.modeZListe = modeZ
             local etats = {}
+            local raisons = {}
             if modeZ and flyControl.Z.estZombie then
                 for autre in pairs(entrees) do
                     local ok, vivant = pcall(flyControl.Z.vivant, autre)
                     if ok and vivant then
                         local ok2, etat = pcall(flyControl.Z.estZombie, autre)
                         if ok2 then etats[autre] = etat end
+                        if ok2 and etat == nil then raisons[autre] = "Au lobby" end
+                    else
+                        raisons[autre] = "Mort ou hors de portée"
                     end
                 end
             end
             flyControl.etatZListe = etats
+            flyControl.raisonZListe = raisons
         end
         local etatsZ = flyControl.etatZListe or {}
         for autre, e in pairs(entrees) do
@@ -4533,6 +4538,12 @@ lancerTache(function()
                 if flyControl.modeZListe and zEtat ~= nil then
                     texteRole = zEtat and "Zombie" or "Survivant"
                     couleur = zEtat and COL.COULEUR_MURDER or COL.COULEUR_INNOCENT
+                elseif flyControl.modeZListe then
+                    local raison = (flyControl.raisonZListe or {})[autre]
+                    if raison then
+                        texteRole = raison
+                        couleur = COL.MUET
+                    end
                 end
                 local positionTitre = texteRole ~= "" and 10 or 19
                 if e.roleTexte ~= texteRole then
