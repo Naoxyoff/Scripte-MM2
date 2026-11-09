@@ -3031,7 +3031,7 @@ local function optionCurseur(page, nom, description, minimum, maximum, defaut, s
     return inter
 end
 local captureEnCours = false
-local function carteTouche(page, nom, description, lire, ecrire)
+local function carteTouche(page, nom, description, lire, ecrire, cleConfig, effacable)
 	local c = carte(page, 56)
 	texte(c, {
 		Size = UDim2.new(1, -140, 0, 18), Position = UDim2.fromOffset(22, 11),
@@ -3043,7 +3043,7 @@ local function carteTouche(page, nom, description, lire, ecrire)
 	})
 	local b = creer("TextButton", {
 		Size = UDim2.fromOffset(100, 28), Position = UDim2.new(1, -116, 0.5, -14),
-		BackgroundColor3 = COL.CARTE_CLAIRE, Text = lire().Name, TextColor3 = COL.TEXTE,
+		BackgroundColor3 = COL.CARTE_CLAIRE, Text = (lire() and lire().Name or "Aucune"), TextColor3 = COL.TEXTE,
 		Font = Enum.Font.GothamMedium, TextSize = 12, AutoButtonColor = false,
 	}, c)
 	coins(b, 8)
@@ -3058,7 +3058,7 @@ local function carteTouche(page, nom, description, lire, ecrire)
 	local function arreterCapture()
 		if connexion then connexion:Disconnect() connexion = nil end
 		captureEnCours = false
-		b.Text = lire().Name
+		b.Text = (lire() and lire().Name or "Aucune")
 		tw(b, { BackgroundColor3 = COL.CARTE_CLAIRE }, 0.12)
 	end
 	connecter(b.Activated, function()
@@ -3069,8 +3069,15 @@ local function carteTouche(page, nom, description, lire, ecrire)
 		connexion = connecter(UserInputService.InputBegan, function(entree)
 			if entree.UserInputType ~= Enum.UserInputType.Keyboard then return end
 			if entree.KeyCode == Enum.KeyCode.Escape then arreterCapture() return end
-			ecrire(entree.KeyCode)
-            enregistrerConfig("toucheReduireP", entree.KeyCode.Name)
+			local nouvelle = entree.KeyCode
+				if effacable and (nouvelle == Enum.KeyCode.Backspace or nouvelle == Enum.KeyCode.Delete) then
+					ecrire(nil)
+					enregistrerConfig(cleConfig or "toucheReduireP", "")
+					arreterCapture()
+					return
+				end
+				if ecrire(nouvelle) == false then arreterCapture() return end
+            enregistrerConfig(cleConfig or "toucheReduireP", entree.KeyCode.Name)
             arreterCapture()
 		end)
 		task.delay(8, function()
@@ -3792,14 +3799,15 @@ lancerTache(function()
 end)
 end
 section(pages["Combat"], "Protection")
-interrupteur(pages["Combat"], "Anti Fling", "Bloque les flings et les collisions des joueurs", false, function(v)
+flyControl.inters = {}
+flyControl.inters.antiFling = interrupteur(pages["Combat"], "Anti Fling", "Bloque les flings et les collisions des joueurs", false, function(v)
 	definirActif(v)
 end)
 interrupteur(pages["Combat"], "Anti AFK", "Évite d'être expulsé pour inactivité", antiAfkOn, function(v)
 	antiAfkOn = v
 end)
 section(pages["Visuel"], "Rôles & Chams")
-interrupteur(pages["Visuel"], "Chams", "Murder rouge, Sheriff bleu, Héros jaune, innocents verts", false, function(v)
+flyControl.inters.chams = interrupteur(pages["Visuel"], "Chams", "Murder rouge, Sheriff bleu, Héros jaune, innocents verts", false, function(v)
 	rolesActifs = v
 	flyControl.Z.activer(v)
 	if not v then
@@ -3812,11 +3820,11 @@ interrupteur(pages["Visuel"], "Chams arme tombée", "Affiche l'arme tombée en j
 	if not v then retirerArme() end
 end)
 section(pages["Visuel"], "Informations joueurs")
-interrupteur(pages["Visuel"], "Pseudo au-dessus de la tête", "Affiche uniquement le pseudo au-dessus de chaque joueur", false, function(v)
+flyControl.inters.pseudos = interrupteur(pages["Visuel"], "Pseudo au-dessus de la tête", "Affiche uniquement le pseudo au-dessus de chaque joueur", false, function(v)
 	nomsActifs = v
 	if not v then for p in pairs(etiquettes) do retirerEtiquette(p) end end
 end)
-interrupteur(pages["Visuel"], "Traceurs", "Lignes vers le murder, le sheriff et le héros (chams requis)", false, function(v)
+flyControl.inters.traceurs = interrupteur(pages["Visuel"], "Traceurs", "Lignes vers le murder, le sheriff et le héros (chams requis)", false, function(v)
 	tracersActifs = v
 end)
 section(pages["Déplacement"], "Marche & saut")
@@ -3836,13 +3844,13 @@ optionCurseur(pages["Déplacement"], "Puissance de saut", "Modifie la hauteur de
 	end,
 	function(v) sautVal = v end)
 section(pages["Déplacement"], "Vol & noclip")
-interrupteur(pages["Déplacement"], "Fly / Vol", "WASD/ZQSD ou flèches pour voler, vise avec la caméra, Espace/Ctrl pour monter/descendre", flyControl.flyOn, function(v)
+flyControl.inters.fly = interrupteur(pages["Déplacement"], "Fly / Vol", "WASD/ZQSD ou flèches pour voler, vise avec la caméra, Espace/Ctrl pour monter/descendre", flyControl.flyOn, function(v)
     flyControl.activerFly(v)
 end)
 optionCurseur(pages["Déplacement"], "Vitesse du Fly", "Règle la vitesse de déplacement en vol", 20, 180, flyControl.flySpeed, "", nil, function(v)
     flyControl.setSpeed(v)
 end)
-interrupteur(pages["Déplacement"], "Noclip", "Traverse les murs et les joueurs (le sol te porte toujours)", flyControl.noclipOn, function(v)
+flyControl.inters.noclip = interrupteur(pages["Déplacement"], "Noclip", "Traverse les murs et les joueurs (le sol te porte toujours)", flyControl.noclipOn, function(v)
     flyControl.activerNoclip(v)
 end)
 optionCurseur(pages["Déplacement"], "Transparence du noclip", "Plus la valeur est haute, plus ton personnage est transparent (local)", 10, 95, flyControl.noclipTransp, "%", nil, function(v)
@@ -3851,7 +3859,7 @@ end)
 if flyControl.flyOn then flyControl.activerFly(true) end
 if flyControl.noclipOn then flyControl.activerNoclip(true) end
 section(pages["Visuel"], "Éclairage & ambiance")
-interrupteur(pages["Visuel"], "Luminosité maximale", "Supprime l'ombre et éclaire toute la carte", false, function(v)
+flyControl.inters.luminosite = interrupteur(pages["Visuel"], "Luminosité maximale", "Supprime l'ombre et éclaire toute la carte", false, function(v)
 	activerLuminosite(v)
 end)
 interrupteur(pages["Visuel"], "Mode disco", "La lumière de la map change de couleur", false, function(v)
@@ -6054,6 +6062,7 @@ end)
 interAuto = interrupteurVert("Activer l'auto farm", "Attend la manche, active le noclip, récolte puis se remet en attente", false, function(v)
 	if v then demarrerFarm() else arreterFarm() end
 end)
+flyControl.inters.autoFarm = interAuto
 curseurVert("Vitesse", "Studs par seconde vers les pièces", 0, 30, farmCfg.vitesse, function(v) farmCfg.vitesse = v end)
 interrupteurVert("Éviter le murder", "Ignore les pièces à moins de 30 studs du murder et des zombies", farmCfg.eviterMurder, function(v) farmCfg.eviterMurder = v end)
 interrupteurVert("Éviter les autres farmeurs", "Détecte les autres auto farm et prend un chemin différent", farmCfg.eviterFarmeurs, function(v) farmCfg.eviterFarmeurs = v end)
@@ -7070,6 +7079,7 @@ end
 installerGun()
 fpsLabel.Visible = false
 hudInfos.Visible = false
+flyControl.touchesRaccourcis = {}
 section(pages["Paramètres"], "Raccourcis")
 carteTouche(pages["Paramètres"], "Réduire / agrandir", "Clique puis appuie sur la touche voulue (Échap pour annuler)",
 	function() return TOUCHE_REDUIRE or Enum.KeyCode.P end,
@@ -7080,8 +7090,79 @@ carteTouche(pages["Paramètres"], "Réduire / agrandir", "Clique puis appuie sur
 				notifierInterface("Touche aussi utilisée pour le vol", COL.ORANGE, "touche_vol_" .. tostring(os.clock()))
 			end
 		end
-		TOUCHE_REDUIRE = code
+		for cle, k in pairs(flyControl.touchesRaccourcis) do
+				if k == code then
+					if notifierInterface then
+						notifierInterface("Touche déjà utilisée par un autre raccourci", COL.ORANGE, "touche_conflit_" .. tostring(os.clock()))
+					end
+					return false
+				end
+			end
+			TOUCHE_REDUIRE = code
 	end)
+do
+	local function lireToucheOpt(cle, defautNom)
+		local v = valeurConfig(cle, defautNom or "")
+		if v == "" then return nil end
+		local ok, code = pcall(function() return Enum.KeyCode[v] end)
+		if ok and typeof(code) == "EnumItem" then return code end
+		return nil
+	end
+	local function basculerInter(cle, nom)
+		local i = flyControl.inters and flyControl.inters[cle]
+		if not i then return end
+		i.set(not i.get())
+		if notifierInterface then
+			notifierInterface(nom .. (i.get() and " activé" or " désactivé"),
+				i.get() and COL.VERT or COL.GRIS, "raccourci_" .. cle .. "_" .. tostring(os.clock()))
+		end
+	end
+	flyControl.defsRaccourcis = {
+		{ cle = "fly", nom = "Fly / Vol", defaut = "F", action = function()
+			local i = flyControl.inters.fly
+			local cible = not flyControl.flyOn
+			if i and i.get() ~= cible then i.set(cible) else flyControl.activerFly(cible) end
+		end },
+		{ cle = "noclip", nom = "Noclip", defaut = "N", action = function()
+			local i = flyControl.inters.noclip
+			local cible = not flyControl.noclipOn
+			if i and i.get() ~= cible then i.set(cible) else flyControl.activerNoclip(cible) end
+		end },
+		{ cle = "chams", nom = "Chams", defaut = "H", action = function() basculerInter("chams", "Chams") end },
+		{ cle = "autoFarm", nom = "Auto Farm", defaut = "L", action = function() basculerInter("autoFarm", "Auto farm") end },
+		{ cle = "antiFling", nom = "Anti Fling", defaut = "G", action = function() basculerInter("antiFling", "Anti Fling") end },
+	}
+	for _, def in ipairs(flyControl.defsRaccourcis) do
+		local code = lireToucheOpt("toucheRaccourci_" .. def.cle, def.defaut)
+		if code == TOUCHE_REDUIRE then code = nil end
+		flyControl.touchesRaccourcis[def.cle] = code
+	end
+	section(pages["Paramètres"], "Raccourcis des fonctions")
+	for _, def in ipairs(flyControl.defsRaccourcis) do
+		carteTouche(pages["Paramètres"], def.nom, "Active / désactive (Retour arrière = aucune touche)",
+			function() return flyControl.touchesRaccourcis[def.cle] end,
+			function(code)
+				if code ~= nil then
+					if code == TOUCHE_REDUIRE then
+						if notifierInterface then
+							notifierInterface("Touche déjà utilisée pour réduire le menu", COL.ORANGE, "touche_conflit_" .. tostring(os.clock()))
+						end
+						return false
+					end
+					for cle, k in pairs(flyControl.touchesRaccourcis) do
+						if cle ~= def.cle and k == code then
+							if notifierInterface then
+								notifierInterface("Touche déjà utilisée par un autre raccourci", COL.ORANGE, "touche_conflit_" .. tostring(os.clock()))
+							end
+							return false
+						end
+					end
+				end
+				flyControl.touchesRaccourcis[def.cle] = code
+			end,
+			"toucheRaccourci_" .. def.cle, true)
+	end
+end
 section(pages["Paramètres"], "Préférences")
 carteBouton(pages["Paramètres"], "Sauvegarder les réglages", "Enregistre tous les interrupteurs, curseurs et raccourcis pour le prochain lancement", "Sauver", COL.VIOLET, function()
     local cfg = {
@@ -7317,6 +7398,12 @@ connecter(UserInputService.InputBegan, function(entree, pris)
 	if captureEnCours then return end
 	if UserInputService:GetFocusedTextBox() then return end
 	if pris then return end
+	for _, def in ipairs(flyControl.defsRaccourcis or {}) do
+		if flyControl.touchesRaccourcis[def.cle] == entree.KeyCode then
+			pcall(def.action)
+			return
+		end
+	end
 	if entree.KeyCode == TOUCHE_REDUIRE then
 		basculerReduit()
 	end
