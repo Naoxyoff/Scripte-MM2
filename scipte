@@ -1177,87 +1177,7 @@ do
 		return false
 	end
 
-	local function brancher(o)
-		if not o:IsA("RemoteEvent") then return end
-		local nomEvt = string.lower(o.Name)
-		local finManche = string.find(nomEvt, "roundend", 1, true) or string.find(nomEvt, "endround", 1, true)
-			or string.find(nomEvt, "winner", 1, true) or string.find(nomEvt, "gameover", 1, true)
-
-		local pieceRemote = (string.find(nomEvt, "coin", 1, true) or string.find(nomEvt, "candy", 1, true))
-			and string.find(nomEvt, "collect", 1, true)
-		pcall(function()
-			connecter(o.OnClientEvent, function(...)
-				if fermee then return end
-				if pieceRemote then
-					remoteCoinVu = true
-
-					local courant = nil
-					for i = 1, select("#", ...) do
-						local a = select(i, ...)
-						if type(a) == "number" then courant = a break end
-					end
-					local gain = 1
-					if courant then
-						if courant > dernierSacPieces then
-							gain = courant - dernierSacPieces
-						elseif courant < dernierSacPieces then
-							gain = courant
-						else
-							gain = 0
-						end
-						dernierSacPieces = courant
-						if gain > 10 then gain = 1 end
-					end
-					ajouterPiecesStats(gain)
-					return
-				end
-				if finManche then
-
-					if latchFinManche and os.clock() - tFinManche < 10 then return end
-                    statsMM2.manches = statsMM2.manches + 1
-
-                    local roleGagnant = nil
-                    for i = 1, select("#", ...) do
-                        local arg = select(i, ...)
-                        if type(arg) == "string" then
-                            local txt = string.lower(arg)
-                            if string.find(txt, "murder", 1, true) then roleGagnant = "murder"
-                            elseif string.find(txt, "sheriff", 1, true) or string.find(txt, "sherif", 1, true) then roleGagnant = "sherif"
-                            elseif string.find(txt, "innocent", 1, true) or string.find(txt, "hero", 1, true) then roleGagnant = "innocent" end
-                        elseif type(arg) == "table" then
-                            local txt = string.lower(tostring(arg.Winner or arg.winner or arg.WinningRole or arg.winningRole or ""))
-                            if string.find(txt, "murder", 1, true) then roleGagnant = "murder"
-                            elseif string.find(txt, "sheriff", 1, true) or string.find(txt, "sherif", 1, true) then roleGagnant = "sherif"
-                            elseif string.find(txt, "innocent", 1, true) or string.find(txt, "hero", 1, true) then roleGagnant = "innocent" end
-                        end
-                    end
-
-                    enregistrerFinManche(roleGagnant)
-					mancheTerminee = true
-					latchFinManche, tFinManche = true, os.clock()
-					finMancheEnAttente = true
-
-					task.delay(0.25, function()
-						if restaurerPositionFinManche then restaurerPositionFinManche() end
-					end)
-					table.clear(rolesServeur)
-					verrouRoles.murder, verrouRoles.sherif = nil, nil
-					table.clear(joueursElimines)
-					for _, p in ipairs(Players:GetPlayers()) do
-						rolesParJoueur[p] = "innocent"
-						local h = halos[p]
-						if h and h.Parent then
-							h.FillColor = COL.COULEUR_INNOCENT
-							h.OutlineColor = COL.COULEUR_INNOCENT:Lerp(Color3.new(1, 1, 1), 0.3)
-						end
-						local b = boites[p]
-						if b and b.Parent then b.Color3 = COL.COULEUR_INNOCENT end
-					end
-					return
-				end
-				for i = 1, select("#", ...) do
-					local res = lireTable((select(i, ...)))
-					if res then
+	local function traiterRoles(res)
 
 						if mancheTerminee then
 							mancheTerminee = false
@@ -1355,7 +1275,89 @@ do
 						end
 						if calculerRoles then calculerRoles() end
 						if flyControl.majVisuelsMaintenant then flyControl.majVisuelsMaintenant() end
+	end
+
+	local function brancher(o)
+		if not o:IsA("RemoteEvent") then return end
+		local nomEvt = string.lower(o.Name)
+		local finManche = string.find(nomEvt, "roundend", 1, true) or string.find(nomEvt, "endround", 1, true)
+			or string.find(nomEvt, "winner", 1, true) or string.find(nomEvt, "gameover", 1, true)
+
+		local pieceRemote = (string.find(nomEvt, "coin", 1, true) or string.find(nomEvt, "candy", 1, true))
+			and string.find(nomEvt, "collect", 1, true)
+		pcall(function()
+			connecter(o.OnClientEvent, function(...)
+				if fermee then return end
+				if pieceRemote then
+					remoteCoinVu = true
+
+					local courant = nil
+					for i = 1, select("#", ...) do
+						local a = select(i, ...)
+						if type(a) == "number" then courant = a break end
 					end
+					local gain = 1
+					if courant then
+						if courant > dernierSacPieces then
+							gain = courant - dernierSacPieces
+						elseif courant < dernierSacPieces then
+							gain = courant
+						else
+							gain = 0
+						end
+						dernierSacPieces = courant
+						if gain > 10 then gain = 1 end
+					end
+					ajouterPiecesStats(gain)
+					return
+				end
+				if finManche then
+
+					if latchFinManche and os.clock() - tFinManche < 10 then return end
+                    statsMM2.manches = statsMM2.manches + 1
+
+                    local roleGagnant = nil
+                    for i = 1, select("#", ...) do
+                        local arg = select(i, ...)
+                        if type(arg) == "string" then
+                            local txt = string.lower(arg)
+                            if string.find(txt, "murder", 1, true) then roleGagnant = "murder"
+                            elseif string.find(txt, "sheriff", 1, true) or string.find(txt, "sherif", 1, true) then roleGagnant = "sherif"
+                            elseif string.find(txt, "innocent", 1, true) or string.find(txt, "hero", 1, true) then roleGagnant = "innocent" end
+                        elseif type(arg) == "table" then
+                            local txt = string.lower(tostring(arg.Winner or arg.winner or arg.WinningRole or arg.winningRole or ""))
+                            if string.find(txt, "murder", 1, true) then roleGagnant = "murder"
+                            elseif string.find(txt, "sheriff", 1, true) or string.find(txt, "sherif", 1, true) then roleGagnant = "sherif"
+                            elseif string.find(txt, "innocent", 1, true) or string.find(txt, "hero", 1, true) then roleGagnant = "innocent" end
+                        end
+                    end
+
+                    enregistrerFinManche(roleGagnant)
+					mancheTerminee = true
+					latchFinManche, tFinManche = true, os.clock()
+					finMancheEnAttente = true
+
+					task.delay(0.25, function()
+						if restaurerPositionFinManche then restaurerPositionFinManche() end
+					end)
+					table.clear(rolesServeur)
+					verrouRoles.murder, verrouRoles.sherif = nil, nil
+					table.clear(joueursElimines)
+					for _, p in ipairs(Players:GetPlayers()) do
+						rolesParJoueur[p] = "innocent"
+						local h = halos[p]
+						if h and h.Parent then
+							h.FillColor = COL.COULEUR_INNOCENT
+							h.OutlineColor = COL.COULEUR_INNOCENT:Lerp(Color3.new(1, 1, 1), 0.3)
+						end
+						local b = boites[p]
+						if b and b.Parent then b.Color3 = COL.COULEUR_INNOCENT end
+					end
+					return
+				end
+				for i = 1, select("#", ...) do
+					local res = lireTable((select(i, ...)))
+					if res then traiterRoles(res) end
 				end
 			end)
 		end)
@@ -1365,6 +1367,65 @@ do
 		if not remotes then return end
 		for _, o in ipairs(remotes:GetDescendants()) do brancher(o) end
 		connecter(remotes.DescendantAdded, brancher)
+	end)
+	-- Lecture active des rôles : au lancement du script (même en pleine manche) puis
+	-- régulièrement tant que le Murder ou le Sheriff n'est pas connu. Le serveur
+	-- n'envoie les rôles qu'en début de manche ou à chaque mort : sans ça, rien ne
+	-- s'affiche tant que personne ne meurt.
+	lancerTache(function()
+		local fonction, derniereRecherche, avertit = nil, 0, false
+		while not fermee do
+			local murderConnu, sherifConnu = false, false
+			for _, r in pairs(rolesServeur) do
+				if r == "murder" then murderConnu = true elseif r == "sherif" then sherifConnu = true end
+			end
+			if not mancheTerminee and not (murderConnu and sherifConnu) then
+				if not fonction or not fonction.Parent then
+					fonction = nil
+					if os.clock() - derniereRecherche > 3 then
+						derniereRecherche = os.clock()
+						for _, o in ipairs(RS:GetDescendants()) do
+							if o:IsA("RemoteFunction") and string.lower(o.Name) == "getplayerdata" then
+								fonction = o
+								break
+							end
+						end
+						if not fonction and not avertit then
+							avertit = true
+							warn("[Les Ténèbres] GetPlayerData introuvable : lecture active des rôles indisponible")
+						end
+					end
+				end
+				local res = nil
+				if fonction then
+					local ok, donnees = pcall(function() return fonction:InvokeServer() end)
+					if ok and type(donnees) == "table" then res = lireTable(donnees) end
+				else
+					-- Secours : le Murder est le joueur qui tient réellement son couteau en main.
+					for _, p in ipairs(Players:GetPlayers()) do
+						local perso = p.Character
+						local outil = perso and perso:FindFirstChild("Knife")
+						if outil and outil:IsA("Tool") then
+							res = res or {}
+							res[p.Name] = "murder"
+							break
+						end
+					end
+				end
+				if res and not fermee and not mancheTerminee then
+					-- On ignore les joueurs encore au lobby (anciennes données d'une manche passée).
+					local dansLobby = flyControl.Z and flyControl.Z.dansLobby
+					if dansLobby then
+						for nom in pairs(res) do
+							local p = Players:FindFirstChild(tostring(nom))
+							if p and p.Character and dansLobby(p.Character) then res[nom] = nil end
+						end
+					end
+					if next(res) ~= nil then traiterRoles(res) end
+				end
+			end
+			task.wait(2)
+		end
 	end)
 end
 local infoManche, infoMurder, infoSherif, infoHeros, infoArme = "Aucune", "—", "—", "—", "Non"
