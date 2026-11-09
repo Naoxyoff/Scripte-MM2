@@ -1123,6 +1123,7 @@ do
 			if type(tab) ~= "table" or profondeur > 6 or visites[tab] then return end
 			visites[tab] = true
 			local roleDirect = normaliser(tab.Role or tab.role or tab.RoleName or tab.roleName or tab.PlayerRole or tab.playerRole)
+			if roleDirect and (tab.Dead == true or tab.Killed == true or tab.dead == true or tab.killed == true) then roleDirect = "innocent" end
 			local joueurDirect = tab.Player or tab.player or tab.UserId or tab.userId or tab.Name or tab.name or tab.DisplayName or tab.displayName
 			if roleDirect and joueurDirect ~= nil then
 				local nomDirect = resoudreNomJoueur(joueurDirect)
@@ -1134,6 +1135,7 @@ do
 				local roleDansCle = normaliser(k)
 				if type(v) == "table" then
 					role = normaliser(v.Role or v.role or v.RoleName or v.roleName or v.PlayerRole or v.playerRole)
+					if role and (v.Dead == true or v.Killed == true or v.dead == true or v.killed == true) then role = "innocent" end
 					local identite = v.Player or v.player or v.UserId or v.userId or v.Name or v.name or v.DisplayName or v.displayName
 					if identite ~= nil then cleJoueur = resoudreNomJoueur(identite) end
 				elseif type(v) == "string" then
@@ -1280,7 +1282,9 @@ do
 
 						local nouvelleDistribution = false
 						for nom, role in pairs(res) do
-							if role ~= "innocent" and joueursElimines[tostring(nom)] then
+							if role ~= "innocent" and joueursElimines[tostring(nom)]
+								and (verrouRoles.murder == nil or joueursElimines[verrouRoles.murder]
+									or Players:FindFirstChild(verrouRoles.murder) == nil) then
 								nouvelleDistribution = true
 								break
 							end
@@ -1907,8 +1911,8 @@ local function majVisuel(joueurCible)
 
 	-- Chams : vert (innocent) par défaut pour tout le monde, lobby compris.
 	-- Murder / Sheriff / Héros ne prennent leur couleur qu'en manche (joueurs au lobby = vert).
-	local chamsVisibles = rolesActifs and rp ~= nil
-		and not (racine and distance > DISTANCE_MAX_CHAMS)
+	local chamsVisibles = rolesActifs
+		and not (rp and racine and distance > DISTANCE_MAX_CHAMS)
 	if not chamsVisibles then
 		retirerHalo(joueurCible)
 	elseif flyControl.Z.actif and modeZombie() then
@@ -1934,7 +1938,7 @@ local function majVisuel(joueurCible)
 		h.OutlineColor = (role == "heros") and c or c:Lerp(Color3.new(1, 1, 1), 0.3)
 		h.FillTransparency = transparenceChams / 100
 		h.OutlineTransparency = 0.05
-		if estInvisible(perso) then
+		if rp and estInvisible(perso) then
 			local b = boites[joueurCible]
 			if not b or not b.Parent or b.Adornee ~= rp then
 				if b then b:Destroy() end
@@ -2033,12 +2037,12 @@ local function trouverArmeTombee()
 end
 local function majArme()
     if not armeActive then
-        infoArme = "Non"
+        infoArme = flyControl.trouverGunDrop() and "Oui" or "Non"
         retirerArme()
         return
     end
     local partie, objetGun = trouverArmeTombee()
-    infoArme = partie and "Oui" or "Non"
+    infoArme = (partie or flyControl.trouverGunDrop()) and "Oui" or "Non"
     if not armeActive or (flyControl.Z.actif and modeZombie()) or not partie or not objetGun then
         retirerArme()
         return
@@ -2185,11 +2189,9 @@ lancerTache(function()
             end
             prochainCalculVisuels = maintenant + 0.2
         end
-        if armeActive and maintenant >= prochainScanArme then
+        if maintenant >= prochainScanArme then
             DIAG.mesure("arme", majArme)
             prochainScanArme = maintenant + 0.60
-        else
-            infoArme = "Non"
         end
         task.wait(0.10)
     end
