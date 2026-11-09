@@ -1026,6 +1026,7 @@ local halos, etiquettes = {}, {}
 local boites = {}
 local rolesParJoueur = {}
 local rolesServeur = {}
+flyControl.tRoleRecu = {}
 local verrouRoles = { murder = nil, sherif = nil }
 local calculerRoles
 local joueursElimines = {}
@@ -1312,6 +1313,7 @@ do
                             elseif correspondancesDisplay > 1 then
                                 nom = nil
                             end
+							if nom and role ~= "innocent" then flyControl.tRoleRecu[nom] = os.clock() end
 							if nom and not joueursElimines[nom] then
 								if role == "murder" or role == "sherif" then
 									-- Rôle donné en début de manche : verrouillé jusqu'à la fin de la manche.
@@ -1348,6 +1350,7 @@ do
 							end
 						end
 						if calculerRoles then calculerRoles() end
+						if flyControl.majVisuelsMaintenant then flyControl.majVisuelsMaintenant() end
 					end
 				end
 			end)
@@ -1640,7 +1643,7 @@ calculerRoles = function()
 				if p == herosOrigine then herosOrigine = nil end
 			end
 			r = "innocent"
-		elseif auLobby then
+		elseif auLobby and not (flyControl.tRoleRecu[p.Name] and os.clock() - flyControl.tRoleRecu[p.Name] < 8) then
 			r = "innocent"
 		elseif p == murder and vivant then
 			r = "murder"
@@ -2141,6 +2144,7 @@ local function surveillerArmes(p)
     perso(p.Character)
     connecter(p.CharacterAdded, function(c) perso(c) declencherMajImmediate() end)
 end
+flyControl.majVisuelsMaintenant = declencherMajImmediate
 for _, p in ipairs(Players:GetPlayers()) do surveillerArmes(p) end
 connecter(Players.PlayerAdded, surveillerArmes)
 connecter(workspace.DescendantRemoving, function(o)
@@ -2166,7 +2170,7 @@ lancerTache(function()
                     if flyControl.Z.actif then DIAG.mesure("chams-zombie", majChamsZombie, autre) end
                 end
             end
-            prochainCalculVisuels = maintenant + 0.35
+            prochainCalculVisuels = maintenant + 0.2
         end
         if armeActive and maintenant >= prochainScanArme then
             DIAG.mesure("arme", majArme)
@@ -3678,14 +3682,16 @@ for i, def in ipairs(defsInfo) do
 end
 
 lancerTache(function()
+	local nPanneau = 0
 	while not fermee do
 		lignesInfo[1].Text = infoManche
 		lignesInfo[2].Text = infoMurder
 		lignesInfo[3].Text = infoSherif
 		lignesInfo[4].Text = infoHeros
 		lignesInfo[5].Text = infoArme
-		majPuces()
-		task.wait(1)
+		nPanneau = nPanneau + 1
+		if nPanneau % 7 == 1 then majPuces() end
+		task.wait(0.15)
 	end
 end)
 end
