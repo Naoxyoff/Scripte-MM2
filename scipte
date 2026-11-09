@@ -1694,6 +1694,10 @@ calculerRoles = function()
 		local hum = personnage and personnage:FindFirstChildOfClass("Humanoid")
 		local srv = rolesServeur[p.Name]
 		local auLobby = hum ~= nil and estDansLobby(personnage)
+		if p == joueur and flyControl.arriveeManuelle
+			and (auLobby or generationManche ~= flyControl.genArrivee) then
+			flyControl.arriveeManuelle = false
+		end
 
 		-- Le lobby n'efface le rôle que si le joueur a déjà été vu en map pendant cette manche
 		-- (retour au lobby = fin de manche). Avant la téléportation, le rôle est déjà affiché.
@@ -3852,6 +3856,21 @@ local pageTP = pages["Joueurs"]
 section(pageTP, "Liste des joueurs").LayoutOrder = 99999
 local entrees = {}
 local flingVers
+-- Si on se téléporte à la main depuis le lobby, ou après être mort / éliminé, on n'est
+-- PAS engagé dans la manche : l'auto farm reste en pause jusqu'au retour au lobby
+-- ou jusqu'à la prochaine manche.
+flyControl.marquerArriveeManuelle = function()
+    local perso0 = joueur.Character
+    local hum0 = perso0 and perso0:FindFirstChildOfClass("Humanoid")
+    local dansLobby = flyControl.Z and flyControl.Z.dansLobby
+    local horsManche = (dansLobby and perso0 and dansLobby(perso0))
+        or (hum0 and hum0.Health <= 0)
+        or joueursElimines[joueur.Name] == true
+    if horsManche then
+        flyControl.arriveeManuelle = true
+        flyControl.genArrivee = generationManche
+    end
+end
 ;(function()
     local TAILLE_IMPACT      = Vector3.new(6, 6, 6)
     local DENSITE_IMPACT     = 100
@@ -4093,6 +4112,7 @@ local flingVers
             notifier("Impossible de te fling toi-même", COL.ORANGE)
             return
         end
+        flyControl.marquerArriveeManuelle()
         local persoCible = cible.Character
         local rpCible = persoCible and persoCible:FindFirstChild("HumanoidRootPart")
         local humCible = persoCible and persoCible:FindFirstChildOfClass("Humanoid")
@@ -4403,6 +4423,7 @@ local function teleporterVers(cible)
         end
         return
     end
+    flyControl.marquerArriveeManuelle()
     pcall(function()
         racine.AssemblyLinearVelocity = Vector3.zero
         racine.AssemblyAngularVelocity = Vector3.zero
@@ -4467,11 +4488,36 @@ connecter(Players.PlayerAdded, creerEntree)
 connecter(Players.PlayerRemoving, retirerEntree)
 lancerTache(function()
     while not fermee do
+        -- Mode Infection : même affichage que les rôles classiques, avec la détection zombie
+        -- déjà utilisée par les chams (rafraîchie 2,5 fois par seconde pour rester léger).
+        local tZ = os.clock()
+        if tZ >= (flyControl.prochainZombieListe or 0) then
+            flyControl.prochainZombieListe = tZ + 0.4
+            local modeZ = (flyControl.Z.mode and flyControl.Z.mode()) == true
+            flyControl.modeZListe = modeZ
+            local etats = {}
+            if modeZ and flyControl.Z.estZombie then
+                for autre in pairs(entrees) do
+                    local ok, vivant = pcall(flyControl.Z.vivant, autre)
+                    if ok and vivant then
+                        local ok2, etat = pcall(flyControl.Z.estZombie, autre)
+                        if ok2 then etats[autre] = etat end
+                    end
+                end
+            end
+            flyControl.etatZListe = etats
+        end
+        local etatsZ = flyControl.etatZListe or {}
         for autre, e in pairs(entrees) do
             if e.sub and e.sub.Parent then
                 local role = rolesParJoueur[autre]
                 local texteRole = (role and role ~= "innocent") and (NOMS_ROLES[role] or "") or ""
                 local couleur = texteRole ~= "" and couleurRole(role) or COL.MUET
+                local zEtat = etatsZ[autre]
+                if flyControl.modeZListe and zEtat ~= nil then
+                    texteRole = zEtat and "Zombie" or "Survivant"
+                    couleur = zEtat and COL.COULEUR_MURDER or COL.COULEUR_INNOCENT
+                end
                 local positionTitre = texteRole ~= "" and 10 or 19
                 if e.roleTexte ~= texteRole then
                     e.sub.Text = texteRole
@@ -5678,6 +5724,7 @@ local function pas(dt)
 	end
 	-- L'etat elimine verrouille les roles, mais ne doit pas bloquer le farm apres un respawn.
 	local mort = h.Health <= 0
+	local horsManche = flyControl.arriveeManuelle == true
 	local finMurder = false
 	if infoMurder ~= "—" then
 		murderVu, tMurderAbsent = true, nil
@@ -5705,9 +5752,9 @@ local function pas(dt)
 		pauseStallJusqua = t + 25
 		derniereRecolte = t
 	end
-	local engage = restantes > 0 and not auLobby and distanceMin <= RAYON_ENGAGE and not sacPlein and not mort
+	local engage = restantes > 0 and not auLobby and distanceMin <= RAYON_ENGAGE and not sacPlein and not mort and not horsManche
 		and not finManche and t >= pauseStallJusqua
-	local raisonFerme = sacPlein or mort or auLobby or latchFinManche or t < pauseStallJusqua
+	local raisonFerme = sacPlein or mort or horsManche or auLobby or latchFinManche or t < pauseStallJusqua
 	if engage then
 		perduDepuis = nil
 	elseif enFarm and not raisonFerme then
@@ -5719,7 +5766,7 @@ local function pas(dt)
 		if enFarm then
 			if t - dernierArretConsigne > 3 then
 				dernierArretConsigne = t
-				local raison = (sacPlein and "sac plein") or (mort and "éliminé") or (auLobby and "lobby")
+				local raison = (sacPlein and "sac plein") or (mort and "éliminé") or (horsManche and "hors manche (téléporté)") or (auLobby and "lobby")
 					or (latchFinManche and "fin de manche") or (t < pauseStallJusqua and "aucune pièce récoltée depuis 25 s")
 					or (restantes == 0 and "plus de pièces") or (finManche and "murder absent")
 					or "pièces trop loin"
@@ -5739,6 +5786,8 @@ local function pas(dt)
 			etatTexte = "Aucune pièce récoltable : pause avant nouvel essai"
 		elseif mort then
 			etatTexte = "Éliminé : collecte en pause jusqu'à la prochaine manche"
+		elseif horsManche then
+			etatTexte = "Hors manche (téléporté) : collecte en pause jusqu'à la prochaine manche"
 		elseif sacPlein then
 			etatTexte = "Sac plein"
 		elseif auLobby then
