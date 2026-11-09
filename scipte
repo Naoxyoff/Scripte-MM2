@@ -4370,7 +4370,7 @@ local function creerEntree(autre)
     })
     local sub = texte(c, {
         Size = UDim2.new(1, -260, 0, 16), Position = UDim2.fromOffset(56, 29),
-        Text = "", TextColor3 = COL.MUET, TextSize = 10, TextTruncate = Enum.TextTruncate.AtEnd,
+        Text = "", TextColor3 = COL.MUET, TextSize = 11, Font = Enum.Font.GothamBold, TextTruncate = Enum.TextTruncate.AtEnd,
     })
     local bTPA = creer("TextButton", {
         Size = UDim2.fromOffset(70, 28), Position = UDim2.new(1, -86, 0.5, -14),
@@ -4424,7 +4424,7 @@ lancerTache(function()
                 end
             end
         end
-        task.wait(1.5)
+        task.wait(0.15)
     end
 end)
 end
