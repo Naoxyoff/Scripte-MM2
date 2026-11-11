@@ -1,4 +1,3 @@
-
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -1859,7 +1858,9 @@ local function possedeCouteauZombie(p)
         for _, objet in ipairs(conteneur:GetChildren()) do
             if objet:IsA("Tool") then
                 local nom = string.lower(objet.Name)
-                if nom == "knife" or string.find(nom, "knife", 1, true) then
+                if (nom == "knife" or string.find(nom, "knife", 1, true))
+                    and not string.find(nom, "display", 1, true)
+                    and not string.find(nom, "skin", 1, true) then
                     return true
                 end
             end
@@ -1883,16 +1884,30 @@ local function estZombieOuSurvivant(p)
         return true
     end
 
+    -- Indices explicites et fiables (attribut « infecté » vrai).
+    for _, objet in ipairs({ p, perso }) do
+        if objet then
+            for nomAttr, valeur in pairs(objet:GetAttributes()) do
+                local cle = string.lower(tostring(nomAttr))
+                if (cle == "iszombie" or cle == "infected" or cle == "isinfected") and valeur == true then
+                    return true
+                end
+            end
+        end
+    end
+
+    -- Mode infection détecté par les couteaux : le couteau fait foi, et lui seul.
+    -- Les anciennes heuristiques (noms d'outils / attributs « claw », « bite »...)
+    -- étaient trop larges et marquaient des survivants en rouge.
+    if flyControl.Z.modeCouteau then
+        return possedeCouteauZombie(p)
+    end
+
+    -- Hors détection par couteau : heuristiques larges conservées.
     if attributZombie(p) or attributZombie(perso) then
         return true
     end
-
-    local conteneurs = {
-        perso,
-        p:FindFirstChildOfClass("Backpack")
-    }
-
-    for _, conteneur in ipairs(conteneurs) do
+    for _, conteneur in ipairs({ perso, p:FindFirstChildOfClass("Backpack") }) do
         if conteneur then
             for _, objet in ipairs(conteneur:GetChildren()) do
                 if objet:IsA("Tool") and estNomZombie(objet.Name) then
@@ -1900,11 +1915,6 @@ local function estZombieOuSurvivant(p)
                 end
             end
         end
-    end
-
-    -- Détection par le couteau : en mode infection, les zombies tiennent un couteau.
-    if flyControl.Z.modeCouteau then
-        return possedeCouteauZombie(p)
     end
 
     return false
