@@ -1392,10 +1392,15 @@ do
 					fonction = nil
 					if os.clock() - derniereRecherche > 3 then
 						derniereRecherche = os.clock()
-						for _, o in ipairs(RS:GetDescendants()) do
-							if o:IsA("RemoteFunction") and string.lower(o.Name) == "getplayerdata" then
-								fonction = o
-								break
+						local direct = RS:FindFirstChild("GetPlayerData", true)
+						if direct and direct:IsA("RemoteFunction") then
+							fonction = direct
+						else
+							for _, o in ipairs(RS:GetDescendants()) do
+								if o:IsA("RemoteFunction") and string.lower(o.Name) == "getplayerdata" then
+									fonction = o
+									break
+								end
 							end
 						end
 						if not fonction and not avertit then
@@ -1446,8 +1451,15 @@ do
 	flyControl.trouverGunDrop = function()
 		if cache and cache.Parent then return cache end
 		cache = nil
+		-- Recherche directe (instantanée) d'abord ; la recherche récursive de tout le
+		-- workspace (gel de plusieurs ms) est espacée, les événements alimentent déjà le cache.
+		local direct = workspace:FindFirstChild("GunDrop")
+		if direct then
+			cache = direct
+			return cache
+		end
 		local t = os.clock()
-		if t - derniereRecherche < 8 then return nil end
+		if t - derniereRecherche < 30 then return nil end
 		derniereRecherche = t
 		cache = workspace:FindFirstChild("GunDrop", true)
 		return cache
@@ -1528,29 +1540,36 @@ local function estAuLobbyPourChams()
 	if not centreLobbyChams or not racine then return false end
 	return (racine.Position - centreLobbyChams).Magnitude < 80
 end
+local variantesOutilCache = {}
 local function aOutil(joueurCible, nom)
 	local perso = joueurCible.Character
 	local sac = joueurCible:FindFirstChildOfClass("Backpack")
 	local attendu = string.lower(nom)
-	local variantes = {
-		[attendu] = true,
-		[attendu .. "display"] = true,
-		[attendu .. "_display"] = true,
-		[attendu .. " display"] = true,
-	}
-	if attendu == "gun" then
-		variantes.revolver = true
-		variantes.sheriffgun = true
-		variantes.sheriff_gun = true
-		variantes.pistol = true
+	local variantes = variantesOutilCache[attendu]
+	if not variantes then
+		variantes = {
+			[attendu] = true,
+			[attendu .. "display"] = true,
+			[attendu .. "_display"] = true,
+			[attendu .. " display"] = true,
+		}
+		if attendu == "gun" then
+			variantes.revolver = true
+			variantes.sheriffgun = true
+			variantes.sheriff_gun = true
+			variantes.pistol = true
+		end
+		variantesOutilCache[attendu] = variantes
 	end
 	local function contient(container)
 		if not container then return false end
 		for _, objet in ipairs(container:GetChildren()) do
 			if objet:IsA("Tool") then
-				local nomObjet = string.lower(objet.Name):gsub("[%s%-]", "_")
-				if variantes[nomObjet] or variantes[string.lower(objet.Name)] then
-					return true
+				local bas = string.lower(objet.Name)
+				if variantes[bas] then return true end
+				if string.find(bas, "[%s%-]") then
+					local nomObjet = string.gsub(bas, "[%s%-]", "_")
+					if variantes[nomObjet] then return true end
 				end
 			end
 		end
@@ -2093,10 +2112,13 @@ local function majVisuel(joueurCible)
 			h.Parent = perso
 			halos[joueurCible] = h
 		end
-		h.FillColor = c
-		h.OutlineColor = (role == "heros") and c or c:Lerp(Color3.new(1, 1, 1), 0.3)
-		h.FillTransparency = transparenceChams / 100
-		h.OutlineTransparency = 0.05
+		-- Écritures de propriétés seulement si la valeur change (évite du travail inutile à 5 Hz par joueur).
+		if h.FillColor ~= c then h.FillColor = c end
+		local couleurContour = (role == "heros") and c or c:Lerp(Color3.new(1, 1, 1), 0.3)
+		if h.OutlineColor ~= couleurContour then h.OutlineColor = couleurContour end
+		local transpChams = transparenceChams / 100
+		if h.FillTransparency ~= transpChams then h.FillTransparency = transpChams end
+		if h.OutlineTransparency ~= 0.05 then h.OutlineTransparency = 0.05 end
 		if rp and estInvisible(perso) then
 			local b = boites[joueurCible]
 			if not b or not b.Parent or b.Adornee ~= rp then
@@ -2279,8 +2301,10 @@ local function declencherMajImmediate()
     end)
 end
 local function nomArme(o)
-    return o:IsA("Tool") or string.find(string.lower(o.Name), "gun", 1, true) ~= nil
-        or string.find(string.lower(o.Name), "knife", 1, true) ~= nil
+    if o:IsA("Tool") then return true end
+    local bas = string.lower(o.Name)
+    return string.find(bas, "gun", 1, true) ~= nil
+        or string.find(bas, "knife", 1, true) ~= nil
 end
 local function surveillerArmes(p)
     local function sac(b)
