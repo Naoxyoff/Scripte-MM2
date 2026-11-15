@@ -7035,6 +7035,7 @@ local function installerGun()
     local dernierGrab = 0
     local derniereRecherche = 0
     local armeCache = nil
+    local derniereNotif = nil
     local function statut(message, couleur)
     end
     local function afficherArme(message)
@@ -7087,6 +7088,15 @@ local function installerGun()
     end
     local function grabGun()
         if grabEnCours or flingActif then return end
+        -- Mort, éliminé ou au lobby : aucun grab.
+        if joueursElimines[joueur.Name] then return end
+        do
+            local persoVivant = joueur.Character
+            local humVivant = persoVivant and persoVivant:FindFirstChildOfClass("Humanoid")
+            if not humVivant or humVivant.Health <= 0 then return end
+            local dansLobby = flyControl.Z and flyControl.Z.dansLobby
+            if dansLobby and dansLobby(persoVivant) then return end
+        end
         if os.clock() - dernierGrab < COOLDOWN_GRAB then
             return
         end
@@ -7129,8 +7139,19 @@ local function installerGun()
                 end
             end
         end
+        -- Si l'arme porte un ProximityPrompt, il est déclenché aussi (instantané, sans maintien).
+        local prompts = {}
+        if objetArme then
+            for _, d in ipairs(objetArme:GetDescendants()) do
+                if d:IsA("ProximityPrompt") then prompts[#prompts + 1] = d end
+            end
+            if objetArme:IsA("ProximityPrompt") then prompts[#prompts + 1] = objetArme end
+        end
         local debut = os.clock()
         repeat
+            if typeof(fireproximityprompt) == "function" then
+                for i = 1, #prompts do pcall(fireproximityprompt, prompts[i]) end
+            end
             if toucheDisponible then
                 -- Deux salves par frame : le premier contact valide gagne la course.
                 for _ = 1, 2 do
@@ -7147,7 +7168,7 @@ local function installerGun()
             end
             RunService.Heartbeat:Wait()
         until possedeGun() or fermee or not gunDrop.Parent
-            or humanoide.Health <= 0 or os.clock() - debut >= DUREE_MAX_GRAB
+            or humanoide.Health <= 0 or joueursElimines[joueur.Name] or os.clock() - debut >= DUREE_MAX_GRAB
         if possedeGun() then
             statut("Revolver récupéré !", COL.VERT)
             afficherArme("Arme : dans ton inventaire")
@@ -7155,6 +7176,11 @@ local function installerGun()
             statut("Impossible : contact distant non disponible", COL.ROUGE)
         else
             statut("Refusé par MM2 : le serveur exige la proximité", COL.ORANGE)
+            -- Une seule alerte par arme tombée (centre de notifications, sans pop-up).
+            if gunDrop ~= derniereNotif and notifierInterface then
+                derniereNotif = gunDrop
+                pcall(notifierInterface, "Grab Gun : contact à distance refusé par le serveur", COL.ORANGE, "grab_refuse_" .. tostring(os.clock()))
+            end
         end
         grabEnCours = false
     end
