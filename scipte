@@ -81,6 +81,8 @@ local connexionsGlobales = environnementGlobal.__TENEBRES_CONNEXIONS
 -- la fin réelle de l'initialisation. Le BindableEvent évite toute boucle d'attente.
 local chargementTermine = false
 local chargementAnnule = false
+-- Passe à true à la fermeture : plus aucun callback ne s'exécute après (arrêt net, comme ALT+F4).
+local scriptFerme = false
 local signalFinChargement = Instance.new("BindableEvent")
 local restaurationsEnAttente = {}
 if type(connexionsGlobales) ~= "table" then
@@ -90,7 +92,7 @@ end
 
 local function connecter(signal, rappel)
     local connexion = signal:Connect(function(...)
-        if not chargementTermine or environnementGlobal.__TENEBRES_FERMER == true then
+        if scriptFerme or not chargementTermine or environnementGlobal.__TENEBRES_FERMER == true then
             return
         end
         rappel(...)
@@ -7382,6 +7384,15 @@ local function fermerScript()
     pcall(function()
         if interface then interface.Enabled = false end
     end)
+    -- Un fling en cours doit se terminer proprement (restauration du personnage)
+    -- avant de tout couper. Il est fait en premier : les arrêts ci-dessous
+    -- annulent ensuite tout ce que la fin du fling aurait réactivé (fly, noclip...).
+    pcall(function()
+        local t0 = os.clock()
+        while flingActif and os.clock() - t0 < 1.5 do
+            RunService.Heartbeat:Wait()
+        end
+    end)
     pcall(function()
         if flyControl.farm and flyControl.farm.arreter then
             flyControl.farm.arreter()
@@ -7424,12 +7435,45 @@ local function fermerScript()
         rolesActifs, armeActive, nomsActifs, flyControl.Z.actif = false, false, false, false
         if nettoyerChams then nettoyerChams() end
     end)
+    scriptFerme = true
     for connexion in pairs(connexionsGlobales) do
         pcall(function() connexion:Disconnect() end)
     end
     table.clear(connexionsGlobales)
     pcall(function()
         if interface then interface:Destroy() end
+    end)
+    -- Sécurité : aucun objet du script ne doit rester dans la map ni sur ton personnage.
+    pcall(function()
+        for _, nom in ipairs({ "TenebresFlyVelocity", "TenebresFlyGyro", "TenebresFarmMaintien" }) do
+            local perso = joueur.Character
+            local r = perso and perso:FindFirstChild("HumanoidRootPart")
+            local o = r and r:FindFirstChild(nom)
+            while o do o:Destroy(); o = r:FindFirstChild(nom) end
+        end
+        local perso = joueur.Character
+        if perso then
+            for _, o in ipairs(perso:GetDescendants()) do
+                if o:IsA("Highlight") and (o.Name == "MoiArc" or o.Name == "RoleHalo" or o.Name == "ZombieModeHalo") then
+                    o:Destroy()
+                end
+            end
+        end
+        for _, p in ipairs(Players:GetPlayers()) do
+            local c = p.Character
+            if c then
+                for _, o in ipairs(c:GetDescendants()) do
+                    if (o:IsA("Highlight") and (o.Name == "RoleHalo" or o.Name == "ZombieModeHalo"))
+                        or (o:IsA("BoxHandleAdornment") and o.Name == "RoleBoite")
+                        or (o:IsA("BillboardGui") and o.Name == "RoleEtiquette") then
+                        o:Destroy()
+                    end
+                end
+            end
+        end
+        for _, o in ipairs(workspace:GetChildren()) do
+            if o:IsA("Highlight") and o.Name == "PistoletDore" then o:Destroy() end
+        end
     end)
     if environnementGlobal.__TENEBRES_FERMER == fermerScript then
         environnementGlobal.__TENEBRES_FERMER = nil
