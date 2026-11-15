@@ -5,7 +5,6 @@ local TweenService = game:GetService("TweenService")
 local Lighting = game:GetService("Lighting")
 local HttpService = game:GetService("HttpService")
 local StatsService = game:GetService("Stats")
-
 local LOGO_T_IMAGE = "rbxassetid://0"
 local LOGO_T_READY = false
 local LOGO_T_TEXTES = {}
@@ -51,7 +50,6 @@ local function chargerLogoTRouge()
     end
     return false
 end
--- Le téléchargement réseau ne doit jamais bloquer la construction du menu.
 task.spawn(function()
     local ok, pret = pcall(chargerLogoTRouge)
     if not ok or not pret then return end
@@ -77,11 +75,8 @@ local VirtualUser = game:GetService("VirtualUser")
 local joueur = Players.LocalPlayer
 local environnementGlobal = getgenv and getgenv() or _G
 local connexionsGlobales = environnementGlobal.__TENEBRES_CONNEXIONS
--- Verrou central : aucun callback ni traitement différé ne s'exécute avant
--- la fin réelle de l'initialisation. Le BindableEvent évite toute boucle d'attente.
 local chargementTermine = false
 local chargementAnnule = false
--- Passe à true à la fermeture : plus aucun callback ne s'exécute après (arrêt net, comme ALT+F4).
 local scriptFerme = false
 local signalFinChargement = Instance.new("BindableEvent")
 local restaurationsEnAttente = {}
@@ -89,7 +84,6 @@ if type(connexionsGlobales) ~= "table" then
     connexionsGlobales = setmetatable({}, { __mode = "k" })
     environnementGlobal.__TENEBRES_CONNEXIONS = connexionsGlobales
 end
-
 local function connecter(signal, rappel)
     local connexion = signal:Connect(function(...)
         if scriptFerme or not chargementTermine or environnementGlobal.__TENEBRES_FERMER == true then
@@ -100,7 +94,6 @@ local function connecter(signal, rappel)
     connexionsGlobales[connexion] = true
     return connexion
 end
-
 local function attendreChargement()
     if not chargementTermine and not chargementAnnule then
         signalFinChargement.Event:Wait()
@@ -108,7 +101,6 @@ local function attendreChargement()
     return chargementTermine and not chargementAnnule
         and environnementGlobal.__TENEBRES_FERMER ~= true
 end
-
 local function lancerTache(fonction, ...)
     local args = table.pack(...)
     task.spawn(function()
@@ -121,7 +113,6 @@ local function lancerTache(fonction, ...)
         end
     end)
 end
-
 local function restaurerApresChargement(fonction)
     if type(fonction) ~= "function" then return end
     if chargementTermine then
@@ -130,7 +121,6 @@ local function restaurerApresChargement(fonction)
         restaurationsEnAttente[#restaurationsEnAttente + 1] = fonction
     end
 end
-
 local function terminerChargement()
     if chargementTermine or chargementAnnule then return end
     chargementTermine = true
@@ -273,7 +263,6 @@ local function ajouterPieceStats() ajouterPiecesStats(1) end
 local remoteCoinVu = false
 local valeurConfig
 do
-
     local MIGRATION_CLES = {
         ["ui|toggle|Protection|Anti Fling"] = "ui|toggle|Combat|Anti Fling",
         ["ui|toggle|Protection|Anti AFK"] = "ui|toggle|Combat|Anti AFK",
@@ -1094,13 +1083,11 @@ do
 		if type(v) ~= "string" then return nil end
 		local t = string.lower(v)
 		if string.find(t, "murder", 1, true) then return "murder" end
-
 		if string.find(t, "sher", 1, true) then return "sherif" end
 		if string.find(t, "hero", 1, true) then return "heros" end
 		if string.find(t, "innocent", 1, true) then return "innocent" end
 		return nil
 	end
-
 	local function resoudreNomJoueur(cle)
 		if typeof(cle) == "Instance" and cle:IsA("Player") then
 			return cle.Name
@@ -1147,7 +1134,6 @@ do
 					local nom = cleJoueur or resoudreNomJoueur(k)
 					if nom then res[nom] = role; trouve = true end
 				elseif roleDansCle then
-					-- Certains paquets serveur rangent directement le joueur sous la clé Murderer/Sheriff.
 					local nom = resoudreNomJoueur(v)
 					if nom then res[nom] = roleDansCle; trouve = true
 					elseif type(v) == "table" then
@@ -1164,9 +1150,6 @@ do
 		parcourir(t, 0)
 		return trouve and res or nil
 	end
-
-	-- Un Murder / Sheriff verrouillé ne peut être remplacé que si son détenteur
-	-- n'est plus en partie (parti, mort, éliminé ou revenu au lobby).
 	local function verrouPeutChanger(nomVerrou)
 		if not nomVerrou then return true end
 		local joueurVerrou = Players:FindFirstChild(nomVerrou)
@@ -1178,17 +1161,13 @@ do
 		if dansLobby and dansLobby(perso) then return true end
 		return false
 	end
-
 	local function traiterRoles(res)
-
 						if mancheTerminee then
 							mancheTerminee = false
 							nouvelleMancheAnnoncee = true
 							generationManche = generationManche + 1
 						end
 						dernierRoleServeur = os.clock()
-
-						-- Nouveau Murder annoncé alors que l'ancien n'est plus en partie : nouvelle manche.
 						local murderAnnonce = nil
 						for nom, role in pairs(res) do
 							if role == "murder" then murderAnnonce = tostring(nom) break end
@@ -1201,7 +1180,6 @@ do
 							nouvelleMancheAnnoncee = true
 							generationManche = generationManche + 1
 						end
-
 						local nouvelleDistribution = false
 						for nom, role in pairs(res) do
 							if role ~= "innocent" and joueursElimines[tostring(nom)]
@@ -1218,9 +1196,7 @@ do
 							nouvelleMancheAnnoncee = true
 							generationManche = generationManche + 1
 						end
-
 						for nom, role in pairs(res) do
-
                             local nomOriginal = tostring(nom)
                             local joueurCorrespondant = nil
                             local correspondancesDisplay = 0
@@ -1242,10 +1218,8 @@ do
 							if nom and role ~= "innocent" then flyControl.tRoleRecu[nom] = os.clock() end
 							if nom and not joueursElimines[nom] then
 								if role == "murder" or role == "sherif" then
-									-- Rôle donné en début de manche : verrouillé jusqu'à la fin de la manche.
 									local ancien = verrouRoles[role]
 									if ancien and ancien ~= nom and not verrouPeutChanger(ancien) then
-										-- ignoré : le rôle de cette manche est déjà attribué
 									else
 										if ancien and ancien ~= nom then rolesServeur[ancien] = nil end
 										verrouRoles[role] = nom
@@ -1278,13 +1252,11 @@ do
 						if calculerRoles then calculerRoles() end
 						if flyControl.majVisuelsMaintenant then flyControl.majVisuelsMaintenant() end
 	end
-
 	local function brancher(o)
 		if not o:IsA("RemoteEvent") then return end
 		local nomEvt = string.lower(o.Name)
 		local finManche = string.find(nomEvt, "roundend", 1, true) or string.find(nomEvt, "endround", 1, true)
 			or string.find(nomEvt, "winner", 1, true) or string.find(nomEvt, "gameover", 1, true)
-
 		local pieceRemote = (string.find(nomEvt, "coin", 1, true) or string.find(nomEvt, "candy", 1, true))
 			and string.find(nomEvt, "collect", 1, true)
 		pcall(function()
@@ -1292,7 +1264,6 @@ do
 				if fermee then return end
 				if pieceRemote then
 					remoteCoinVu = true
-
 					local courant = nil
 					for i = 1, select("#", ...) do
 						local a = select(i, ...)
@@ -1314,10 +1285,8 @@ do
 					return
 				end
 				if finManche then
-
 					if latchFinManche and os.clock() - tFinManche < 10 then return end
                     statsMM2.manches = statsMM2.manches + 1
-
                     local roleGagnant = nil
                     for i = 1, select("#", ...) do
                         local arg = select(i, ...)
@@ -1333,20 +1302,16 @@ do
                             elseif string.find(txt, "innocent", 1, true) or string.find(txt, "hero", 1, true) then roleGagnant = "innocent" end
                         end
                     end
-
                     enregistrerFinManche(roleGagnant)
 					mancheTerminee = true
 					latchFinManche, tFinManche = true, os.clock()
 					finMancheEnAttente = true
-
 					task.delay(0.25, function()
 						if restaurerPositionFinManche then restaurerPositionFinManche() end
 					end)
 					table.clear(rolesServeur)
 					verrouRoles.murder, verrouRoles.sherif = nil, nil
 					table.clear(joueursElimines)
-					-- Fin de manche : aucun chams (zombie ou classique) ne doit rester affiché,
-					-- et la détection de mode est remise à zéro pour la manche suivante.
 					if flyControl.Z then
 						flyControl.Z.infectionGen = nil
 						flyControl.Z.classiqueGen = nil
@@ -1378,10 +1343,6 @@ do
 		for _, o in ipairs(remotes:GetDescendants()) do brancher(o) end
 		connecter(remotes.DescendantAdded, brancher)
 	end)
-	-- Lecture active des rôles : au lancement du script (même en pleine manche) puis
-	-- régulièrement tant que le Murder ou le Sheriff n'est pas connu. Le serveur
-	-- n'envoie les rôles qu'en début de manche ou à chaque mort : sans ça, rien ne
-	-- s'affiche tant que personne ne meurt.
 	lancerTache(function()
 		local fonction, derniereRecherche, avertit = nil, 0, false
 		while not fermee do
@@ -1416,7 +1377,6 @@ do
 					local ok, donnees = pcall(function() return fonction:InvokeServer() end)
 					if ok and type(donnees) == "table" then res = lireTable(donnees) end
 				else
-					-- Secours : le Murder est le joueur qui tient réellement son couteau en main.
 					for _, p in ipairs(Players:GetPlayers()) do
 						local perso = p.Character
 						local outil = perso and perso:FindFirstChild("Knife")
@@ -1428,7 +1388,6 @@ do
 					end
 				end
 				if res and not fermee and not mancheTerminee then
-					-- On ignore les joueurs encore au lobby (anciennes données d'une manche passée).
 					local dansLobby = flyControl.Z and flyControl.Z.dansLobby
 					if dansLobby then
 						for nom in pairs(res) do
@@ -1446,15 +1405,11 @@ end
 local infoManche, infoMurder, infoSherif, infoHeros, infoArme = "Aucune", "—", "—", "—", "Non"
 local couleurRole, retirerBoite, retirerHalo, retirerEtiquette, retirerArme, nettoyerChams
 flyControl.Z = { actif = false, halos = {} }
--- Recherche de GunDrop mise en cache : la recherche récursive dans tout le workspace
--- (très coûteuse en partie) n'a lieu qu'une fois, puis les événements alimentent le cache.
 do
 	local cache, derniereRecherche = nil, -1000
 	flyControl.trouverGunDrop = function()
 		if cache and cache.Parent then return cache end
 		cache = nil
-		-- Recherche directe (instantanée) d'abord ; la recherche récursive de tout le
-		-- workspace (gel de plusieurs ms) est espacée, les événements alimentent déjà le cache.
 		local direct = workspace:FindFirstChild("GunDrop")
 		if direct then
 			cache = direct
@@ -1579,7 +1534,6 @@ local function aOutil(joueurCible, nom)
 	end
 	return contient(perso) or contient(sac)
 end
-
 local function possedeVraiCouteau(joueurCible)
 	local perso = joueurCible.Character
 	local sac = joueurCible:FindFirstChildOfClass("Backpack")
@@ -1594,14 +1548,12 @@ local function possedeVraiCouteau(joueurCible)
 	end
 	return contient(perso) or contient(sac)
 end
-
 local function joueurVivant(p)
 	if not p then return false end
 	local perso = p.Character
 	local hum = perso and perso:FindFirstChildOfClass("Humanoid")
 	return hum ~= nil and hum.Health > 0
 end
-
 calculerRoles = function()
 	if finMancheEnAttente then
 		finMancheEnAttente = false
@@ -1627,7 +1579,6 @@ calculerRoles = function()
 		flyControl.Z.classiqueGen = nil
 		flyControl.Z.modeCouteau = false
 	end
-
 	if mancheTerminee then
 		local tousInnocents = {}
 		for _, p in ipairs(Players:GetPlayers()) do tousInnocents[p] = "innocent" end
@@ -1635,20 +1586,14 @@ calculerRoles = function()
 		infoManche, infoMurder, infoSherif, infoHeros = "Aucune", "—", "—", "—"
 		return
 	end
-
 	local listeJoueurs = Players:GetPlayers()
 	local vuEnMap = flyControl.vuEnMap
 	if not vuEnMap then vuEnMap = {}; flyControl.vuEnMap = vuEnMap end
-
-	-- Mort = Humanoid à 0 PV. Un personnage absent (téléportation, rechargement) n'est PAS une mort.
 	local function estMort(p)
 		local perso = p and p.Character
 		local hum = perso and perso:FindFirstChildOfClass("Humanoid")
 		return hum ~= nil and hum.Health <= 0
 	end
-
-	-- RÈGLE : un rôle détecté (Murder / Sheriff / Héros) est conservé jusqu'à la mort de
-	-- son porteur. Ensuite il redevient innocent jusqu'à la prochaine manche.
 	for _, p in ipairs(listeJoueurs) do
 		if estMort(p) and not joueursElimines[p.Name] then
 			joueursElimines[p.Name] = true
@@ -1657,7 +1602,6 @@ calculerRoles = function()
 			if p == herosOrigine then herosOrigine = nil end
 		end
 	end
-
 	local porteurs = {}
 	for _, p in ipairs(listeJoueurs) do
 		if p.Character and not estMort(p) and not joueursElimines[p.Name] and aOutil(p, "Gun")
@@ -1665,8 +1609,6 @@ calculerRoles = function()
 			porteurs[#porteurs + 1] = p
 		end
 	end
-
-	-- Murder et Sheriff proviennent exclusivement du rôle transmis par le serveur.
 	local murder = nil
 	for _, p in ipairs(listeJoueurs) do
 		if not joueursElimines[p.Name] and rolesServeur[p.Name] == "murder" then
@@ -1674,7 +1616,6 @@ calculerRoles = function()
 			break
 		end
 	end
-
 	if not sheriffOrigine then
 		for _, p in ipairs(listeJoueurs) do
 			if rolesServeur[p.Name] == "sherif" then
@@ -1683,14 +1624,10 @@ calculerRoles = function()
 			end
 		end
 	end
-
 	local gunDropPresent = flyControl.trouverGunDrop() ~= nil
 	if gunDropPresent then gunDropVu = true end
 	local sheriffMort = sheriffOrigine ~= nil and (joueursElimines[sheriffOrigine.Name] == true
 		or estMort(sheriffOrigine) or sheriffOrigine.Parent == nil)
-
-	-- Le Héros est mémorisé au premier ramassage du pistolet après la mort du Sheriff,
-	-- et le garde jusqu'à sa propre mort.
 	if sheriffMort and not herosOrigine then
 		for _, p in ipairs(porteurs) do
 			if p ~= sheriffOrigine and p ~= murder then
@@ -1702,7 +1639,6 @@ calculerRoles = function()
 	if herosOrigine and (joueursElimines[herosOrigine.Name] or estMort(herosOrigine) or herosOrigine.Parent == nil) then
 		herosOrigine = nil
 	end
-
 	if murder or sheriffOrigine or #porteurs > 0 or gunDropPresent then
 		armesVues = true
 		tDerniereArme = os.clock()
@@ -1717,10 +1653,8 @@ calculerRoles = function()
 		herosOrigine = nil
 		gunDropVu = false
 	end
-
 	local sherif = (sheriffOrigine and not sheriffMort) and sheriffOrigine or nil
 	local heros = herosOrigine
-
 	local nouveau = {}
 	local srvActif = false
 	for _, p in ipairs(listeJoueurs) do
@@ -1733,14 +1667,10 @@ calculerRoles = function()
 			and (auLobby or generationManche ~= flyControl.genArrivee) then
 			flyControl.arriveeManuelle = false
 		end
-
-		-- Le lobby n'efface le rôle que si le joueur a déjà été vu en map pendant cette manche
-		-- (retour au lobby = fin de manche). Avant la téléportation, le rôle est déjà affiché.
 		if srv and srv ~= "innocent" and hum ~= nil and not auLobby then
 			vuEnMap[p.Name] = generationManche
 		end
 		local retourLobby = auLobby and vuEnMap[p.Name] == generationManche
-
 		if joueursElimines[p.Name] or retourLobby then
 			r = "innocent"
 		elseif p == murder then
@@ -1752,24 +1682,20 @@ calculerRoles = function()
 		elseif srv and srv ~= "innocent" then
 			r = srv
 		end
-
 		if r ~= "innocent" then srvActif = true end
 		nouveau[p] = r
 	end
 	rolesParJoueur = nouveau
-
 	murder, sherif, heros = nil, nil, nil
 	for p, r in pairs(nouveau) do
 		if r == "murder" then murder = p
 		elseif r == "sherif" then sherif = p
 		elseif r == "heros" then heros = p end
 	end
-
 	infoManche = (srvActif or murder or sheriffOrigine or #porteurs > 0 or gunDropPresent) and "En cours" or "Aucune"
 	infoMurder = murder and murder.Name or "—"
 	infoSherif = sherif and sherif.Name or "—"
 	infoHeros = heros and heros.Name or "—"
-
 	if infoManche == "En cours" then
 		if murder then suiviManche.murderNom = murder.Name end
 		local moi = nouveau[joueur]
@@ -1781,7 +1707,6 @@ calculerRoles = function()
 		end
 	end
 end
-
 function couleurRole(role)
 	if role == "murder" then return COL.COULEUR_MURDER end
 	if role == "sherif" then return COL.COULEUR_SHERIF end
@@ -1834,7 +1759,6 @@ local function estInvisible(perso)
 end
 local COULEUR_ZOMBIE = Color3.fromRGB(255, 0, 0)
 local COULEUR_SURVIVANT = Color3.fromRGB(0, 255, 0)
-
 local MOTS_ZOMBIE = { "zombie", "infect", "undead", "claw", "bite" }
 local MOTS_SURVIVANT = { "uninfect", "surviv", "human", "innocent" }
 local function contientMot(texte, liste)
@@ -1890,22 +1814,16 @@ local function possedeCouteauZombie(p)
     end
     return chercher(p.Character) or chercher(p:FindFirstChildOfClass("Backpack"))
 end
-
 local modeZombie
 local function estZombieOuSurvivant(p)
     if not p then return nil end
-
     local perso = p.Character
-
     if perso and estDansLobby(perso) then
         return nil
     end
-
     if p.Team and estNomZombie(p.Team.Name) then
         return true
     end
-
-    -- Indices explicites et fiables (attribut « infecté » vrai).
     for _, objet in ipairs({ p, perso }) do
         if objet then
             for nomAttr, valeur in pairs(objet:GetAttributes()) do
@@ -1916,15 +1834,9 @@ local function estZombieOuSurvivant(p)
             end
         end
     end
-
-    -- Mode infection détecté par les couteaux : le couteau fait foi, et lui seul.
-    -- Les anciennes heuristiques (noms d'outils / attributs « claw », « bite »...)
-    -- étaient trop larges et marquaient des survivants en rouge.
     if flyControl.Z.modeCouteau then
         return possedeCouteauZombie(p)
     end
-
-    -- Hors détection par couteau : heuristiques larges conservées.
     if attributZombie(p) or attributZombie(perso) then
         return true
     end
@@ -1937,7 +1849,6 @@ local function estZombieOuSurvivant(p)
             end
         end
     end
-
     return false
 end
 flyControl.Z.retirer = function(p)
@@ -1956,9 +1867,6 @@ local function attributZombieExplicite(objet)
     return false
 end
 local modeZombieCache, tModeZombie = false, 0
--- Une manche est « réelle » quand le compte à rebours est terminé : le joueur local n'est
--- plus au lobby et au moins un autre joueur vivant est en jeu, hors du lobby.
--- Rien n'est donc verrouillé pendant le lobby ni pendant le compte à rebours.
 local mancheReelleCache, tMancheReelle = false, 0
 local function mancheReelle()
     local t = os.clock()
@@ -1996,8 +1904,6 @@ function modeZombie()
             for _, role in pairs(rolesServeur) do
                 if role == "sherif" then Z.classiqueGen = generationManche break end
             end
-            -- Infection détectée par les couteaux : 2 couteaux ou plus en partie, sans Sheriff
-            -- classique dans cette manche. Verrouillé pour la manche (le 1er zombie compris).
             if n == 0 or Z.classiqueGen == generationManche then
                 Z.infectionGen = nil
             elseif n >= 2 then
@@ -2005,12 +1911,10 @@ function modeZombie()
             end
             Z.modeCouteau = Z.infectionGen ~= nil and Z.infectionGen == generationManche
             if Z.classiqueGen == generationManche then
-                -- Un Sheriff existe dans cette manche : c'est du Classic, jamais de chams zombie.
                 trouve = false
             elseif Z.modeCouteau then
                 trouve = true
             else
-                -- Indice explicite (équipe zombie / attribut infecté) sans Sheriff connu.
                 for _, q in ipairs(Players:GetPlayers()) do
                     local persoQ = q.Character
                     if (q.Team and estNomZombie(q.Team.Name))
@@ -2023,7 +1927,6 @@ function modeZombie()
         end
         modeZombieCache = trouve
         if trouve ~= precedent then
-            -- Changement de mode : on purge l'autre système pour éviter tout résidu de couleur.
             if trouve then
                 for p in pairs(halos) do retirerHalo(p) end
                 for p in pairs(boites) do retirerBoite(p) end
@@ -2053,7 +1956,6 @@ local function majChamsZombie(p)
     local h = flyControl.Z.halos[p]
     if not h or not h.Parent or h.Adornee ~= perso then
         flyControl.Z.retirer(p)
-        -- Un Highlight orphelin sur le même modèle ne doit jamais rester (doublon).
         for _, enfant in ipairs(perso:GetChildren()) do
             if enfant:IsA("Highlight") and enfant.Name == "ZombieModeHalo" then enfant:Destroy() end
         end
@@ -2086,10 +1988,6 @@ local function majVisuel(joueurCible)
 	if rp and racine then
 		distance = (racine.Position - rp.Position).Magnitude
 	end
-
-	-- Chams Classic : visibles aussi dans le lobby et hors manche.
-	-- Les joueurs éliminés gardent la couleur des innocents (vert).
-	-- Le mode Zombie conserve son affichage séparé.
 	local enZombie = flyControl.Z.actif and modeZombie()
 	local chamsPossibles = rolesActifs
 		and not (rp and racine and distance > DISTANCE_MAX_CHAMS)
@@ -2114,7 +2012,6 @@ local function majVisuel(joueurCible)
 			h.Parent = perso
 			halos[joueurCible] = h
 		end
-		-- Écritures de propriétés seulement si la valeur change (évite du travail inutile à 5 Hz par joueur).
 		if h.FillColor ~= c then h.FillColor = c end
 		local couleurContour = (role == "heros") and c or c:Lerp(Color3.new(1, 1, 1), 0.3)
 		if h.OutlineColor ~= couleurContour then h.OutlineColor = couleurContour end
@@ -2140,8 +2037,6 @@ local function majVisuel(joueurCible)
 			retirerBoite(joueurCible)
 		end
 	end
-
-	-- Pseudos : indépendants des chams (fonctionnent même si Chams est désactivé).
 	local tete = perso:FindFirstChild("Head") or rp
 	local pseudoVisible = nomsActifs and tete ~= nil and racine ~= nil and not estAuLobbyPourChams()
 		and hum.Health > 0 and distance <= DISTANCE_MAX_PSEUDO
@@ -2276,7 +2171,6 @@ connecter(workspace.DescendantAdded, function(obj)
 		end)
 	end
 end)
-
 local majImmediateEnAttente = false
 local function majImmediate()
     for _, autre in ipairs(Players:GetPlayers()) do
@@ -2294,7 +2188,6 @@ local function declencherMajImmediate()
         if fermee then return end
         DIAG.mesure("roles", calculerRoles)
         majImmediate()
-
         task.delay(0.12, function()
             if fermee then return end
             DIAG.mesure("roles", calculerRoles)
@@ -2325,9 +2218,6 @@ local function surveillerArmes(p)
     connecter(p.CharacterAdded, function(c) perso(c) declencherMajImmediate() end)
 end
 flyControl.majVisuelsMaintenant = declencherMajImmediate
--- Après une téléportation / un rechargement de personnage, le Highlight est détruit avec
--- l'ancien modèle : on le recrée immédiatement dès que le nouveau corps apparaît,
--- sans attendre la prochaine boucle.
 connecter(workspace.DescendantAdded, function(o)
 	if fermee or not (rolesActifs or nomsActifs) then return end
 	if o.Name == "HumanoidRootPart" or o:IsA("Humanoid") then
@@ -2415,8 +2305,6 @@ end
 local function pilule(o)
 	return creer("UICorner", { CornerRadius = UDim.new(0.5, 0) }, o)
 end
--- Un seul tween actif par objet : un nouvel état remplace proprement l'ancien.
--- Les clés faibles évitent de retenir les composants détruits.
 local tweensActifs = setmetatable({}, { __mode = "k" })
 local function tw(o, props, t, style)
 	if not o then return nil end
@@ -2479,7 +2367,6 @@ connecter(gui.DescendantAdded, function(o)
 	if o:IsA("TextLabel") or o:IsA("TextButton") or o:IsA("TextBox") then pcall(function() o.AutoLocalize = false end) end
 end)
 local echelleInterface = valeurConfig("echelleInterface", 100)
--- Dimensions de reference de la barre reduite (identiques sur PC et emulateur).
 local BARRE_L, BARRE_H = 240, 42
 local scaleFenetre = creer("UIScale", {Scale = 1}, nil)
 local scaleBarre = nil
@@ -2491,13 +2378,9 @@ local function calculerEchelleEcran()
     local viewport = camera.ViewportSize
     local largeurCible = (conteneur and conteneur.Size.X.Offset > 0) and conteneur.Size.X.Offset or LARGEUR
     local hauteurCible = (conteneur and conteneur.Size.Y.Offset > 0) and conteneur.Size.Y.Offset or HAUTEUR
-    -- La grande fenetre garde son adaptation propre.
     local auto = math.min(1, (viewport.X - 28) / (largeurCible + 20), (viewport.Y - 28) / (hauteurCible + 20))
     auto = math.clamp(auto, 0.58, 1)
     scaleFenetre.Scale = auto * (echelleInterface / 100)
-
-    -- IMPORTANT : ne jamais reutiliser l'echelle de la grande fenetre pour
-    -- la barre reduite. Sur BlueStacks, cela la rendait minuscule et floue.
     if scaleBarre then
         local echelleBarre = math.min(
             1,
@@ -2602,7 +2485,6 @@ creer("UIStroke", {
     Transparency = 0.12,
     ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 }, icone)
--- Fond blanc uni : le UIGradient rendait le logo noir sur BlueStacks.
 icone.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 icone.BackgroundTransparency = 0
 local texteIcone = texte(icone, {
@@ -2650,7 +2532,6 @@ local function afficherImage(source)
     end
     for _, t in ipairs(textesIcones) do t.Visible = false end
 end
-
 figerTexte(texte(entete, {
     Size = UDim2.fromOffset(200, 24),
     Position = UDim2.fromOffset(66, 10),
@@ -2682,18 +2563,14 @@ local accentTitre = creer("Frame", {
     BackgroundTransparency = 0,
     BorderSizePixel = 0,
 }, entete)
--- Couleur unie fixe : le UIGradient et le UICorner sur ce trait de 2 px
--- clignotaient sous BlueStacks (même cause que le logo noir déjà corrigé).
 local version = creer("Frame", {
     Name = "BadgeVersion",
-    Size = UDim2.fromOffset(96, 24),
-    Position = UDim2.fromOffset(269, 20),
+    Size = UDim2.fromOffset(124, 30),
+    Position = UDim2.fromOffset(269, 17),
     BackgroundColor3 = Color3.fromRGB(20, 20, 20),
     BorderSizePixel = 0,
 }, entete)
 coins(version, 7)
--- Fond uni et bordure à épaisseur entière : le dégradé et l'épaisseur 1.15
--- clignotaient sous BlueStacks.
 creer("UIStroke", {
     Thickness = 1,
     Color = Color3.fromRGB(170, 45, 60),
@@ -2705,7 +2582,7 @@ texte(version, {
     Text = "VERSION 1.3",
     TextColor3 = Color3.fromRGB(255, 45, 70),
     Font = Enum.Font.GothamBold,
-    TextSize = 8,
+    TextSize = 14,
     TextXAlignment = Enum.TextXAlignment.Center,
 })
 local boutonReduire = creer("TextButton", {
@@ -2741,22 +2618,16 @@ connecter(boutonReduire.Activated, function()
 end)
 local ligneEntete = creer("Frame", {
 	Size = UDim2.new(1, 0, 0, 1), Position = UDim2.fromOffset(0, HAUT_ENTETE),
-	-- Couleur de secours sombre : le gradient ne doit jamais révéler un pixel blanc au montage.
 	BackgroundColor3 = Color3.fromRGB(220, 38, 55), BorderSizePixel = 0,
 }, cadre)
 end
--- Compteur d'utilisateurs (en ligne + total), affiché en haut à droite du menu.
--- Service public gratuit, aucune configuration ni aucun compte : tout est automatique.
--- Aucune donnée personnelle n'est envoyée (seulement des compteurs anonymes).
 do
 local BASE = "https://countapi.mileshilliard.com/api/v1"
 local CLE = "tnb-mm2-k3x9q7"
 local FICHIER_MARQUEUR = "tenebres_mm2_compteur.txt"
 local NB_CASES = 3
-
--- Carte communauté premium : largeur réservée dans l'en-tête, sans déplacer les autres éléments.
-local largeurBoite = 150
-local hauteurBoite = 42
+local largeurBoite = 190
+local hauteurBoite = 48
 local boiteCompteur = creer("Frame", {
     Name = "CompteurUtilisateurs",
     Size = UDim2.fromOffset(largeurBoite, hauteurBoite),
@@ -2768,14 +2639,12 @@ local boiteCompteur = creer("Frame", {
 }, entete)
 boiteCompteur.ClipsDescendants = true
 coins(boiteCompteur, 13)
-
 creer("UIStroke", {
     Thickness = 1,
     Color = Color3.fromRGB(112, 39, 49),
     Transparency = 0.28,
     ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 }, boiteCompteur)
-
 creer("UIGradient", {
     Rotation = 18,
     Color = ColorSequence.new({
@@ -2784,8 +2653,6 @@ creer("UIGradient", {
         ColorSequenceKeypoint.new(1, Color3.fromRGB(9, 10, 13)),
     }),
 }, boiteCompteur)
-
--- Reflet supérieur discret pour renforcer l'effet verre.
 creer("Frame", {
     Name = "RefletCompteur",
     Size = UDim2.new(1, -28, 0, 1),
@@ -2795,98 +2662,63 @@ creer("Frame", {
     BorderSizePixel = 0,
     ZIndex = 5,
 }, boiteCompteur)
-
--- Indicateur en ligne : halo doux et pulsation lente, sans boucle RenderStepped.
-local haloEnLigne = creer("Frame", {
-    Name = "HaloEnLigne",
-    Size = UDim2.fromOffset(9, 9),
-    Position = UDim2.fromOffset(12, 27),
-    BackgroundColor3 = Color3.fromRGB(65, 235, 130),
-    BackgroundTransparency = 0.82,
-    BorderSizePixel = 0,
-    ZIndex = 5,
-}, boiteCompteur)
-coins(haloEnLigne, 99)
-
-local pointEnLigne = creer("Frame", {
-    Name = "PointEnLigne",
-    Size = UDim2.fromOffset(4, 4),
-    Position = UDim2.fromOffset(14.5, 29.5),
-    BackgroundColor3 = Color3.fromRGB(91, 245, 148),
-    BorderSizePixel = 0,
-    ZIndex = 6,
-}, boiteCompteur)
-coins(pointEnLigne, 99)
-
-local pulsation = TweenService:Create(
-    haloEnLigne,
-    TweenInfo.new(1.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
-    { BackgroundTransparency = 0.93, Size = UDim2.fromOffset(11, 11), Position = UDim2.fromOffset(11, 26) }
-)
-pulsation:Play()
-
 local ligneEnLigne = texte(boiteCompteur, {
     Name = "ValeurEnLigne",
-    Size = UDim2.fromOffset(73, 18),
-    Position = UDim2.fromOffset(1, 3),
+    Size = UDim2.fromOffset(94, 24),
+    Position = UDim2.fromOffset(1, 2),
     Text = "—",
     Font = Enum.Font.GothamBold,
-    TextSize = 14,
+    TextSize = 21,
     TextColor3 = Color3.fromRGB(250, 250, 252),
     TextXAlignment = Enum.TextXAlignment.Center,
     TextYAlignment = Enum.TextYAlignment.Center,
     ZIndex = 6,
 })
-
 texte(boiteCompteur, {
     Name = "LibelleEnLigne",
-    Size = UDim2.fromOffset(48, 10),
-    Position = UDim2.fromOffset(25, 24),
+    Size = UDim2.fromOffset(94, 14),
+    Position = UDim2.fromOffset(1, 27),
     Text = "EN LIGNE",
-    Font = Enum.Font.GothamSemibold,
-    TextSize = 7,
-    TextColor3 = Color3.fromRGB(151, 153, 163),
-    TextXAlignment = Enum.TextXAlignment.Left,
+    Font = Enum.Font.GothamBold,
+    TextSize = 11,
+    TextColor3 = Color3.fromRGB(190, 192, 200),
+    TextXAlignment = Enum.TextXAlignment.Center,
     TextYAlignment = Enum.TextYAlignment.Center,
     ZIndex = 6,
 })
-
 creer("Frame", {
     Name = "SeparateurCompteur",
-    Size = UDim2.fromOffset(1, 27),
-    Position = UDim2.fromOffset(75, 7),
+    Size = UDim2.fromOffset(1, 34),
+    Position = UDim2.fromOffset(95, 7),
     BackgroundColor3 = Color3.fromRGB(104, 66, 73),
     BackgroundTransparency = 0.32,
     BorderSizePixel = 0,
     ZIndex = 6,
 }, boiteCompteur)
-
 local ligneTotal = texte(boiteCompteur, {
     Name = "ValeurTotal",
-    Size = UDim2.fromOffset(70, 18),
-    Position = UDim2.fromOffset(79, 3),
+    Size = UDim2.fromOffset(94, 24),
+    Position = UDim2.fromOffset(96, 2),
     Text = "—",
     Font = Enum.Font.GothamBold,
-    TextSize = 14,
+    TextSize = 21,
     TextColor3 = Color3.fromRGB(242, 238, 240),
     TextXAlignment = Enum.TextXAlignment.Center,
     TextYAlignment = Enum.TextYAlignment.Center,
     ZIndex = 6,
 })
-
 texte(boiteCompteur, {
     Name = "LibelleTotal",
-    Size = UDim2.fromOffset(70, 10),
-    Position = UDim2.fromOffset(79, 24),
+    Size = UDim2.fromOffset(94, 14),
+    Position = UDim2.fromOffset(96, 27),
     Text = "UTILISATEURS",
-    Font = Enum.Font.GothamSemibold,
-    TextSize = 7,
-    TextColor3 = Color3.fromRGB(151, 153, 163),
+    Font = Enum.Font.GothamBold,
+    TextSize = 10,
+    TextColor3 = Color3.fromRGB(190, 192, 200),
     TextXAlignment = Enum.TextXAlignment.Center,
     TextYAlignment = Enum.TextYAlignment.Center,
     ZIndex = 6,
 })
-
 local function lireValeur(chemin)
     local ok, corps = pcall(function() return game:HttpGet(BASE .. chemin) end)
     if not ok or type(corps) ~= "string" then return nil end
@@ -2902,8 +2734,6 @@ if peutEcrire then
 end
 local dernierBucket = nil
 local function synchroniser()
-    -- EN LIGNE : chaque script actif ajoute 1 à la case de la minute en cours (une fois par minute).
-    -- Trois cases tournantes, remises à zéro à l'avance : le compteur reste léger et se « vide » tout seul.
     local bucket = math.floor(os.time() / 60)
     local courant
     if bucket ~= dernierBucket then
@@ -2915,7 +2745,6 @@ local function synchroniser()
     end
     local precedent = lireValeur("/get/" .. CLE .. "-l" .. ((bucket - 1) % NB_CASES)) or 0
     local vivants = math.max(courant or 0, precedent, 1)
-    -- TOTAL : chaque installation n'est comptée qu'une seule fois (marqueur local).
     local ajoute = nil
     if peutEcrire and not dejaCompte then
         ajoute = lireValeur("/hit/" .. CLE .. "-total")
@@ -2992,7 +2821,6 @@ local function selectionner(nom)
 	for n, p in pairs(pages) do
 		local voir = (n == nom)
 		if voir and not p.Visible then
-			-- Entrée douce : la page glisse de quelques pixels vers sa place.
 			p.Position = UDim2.fromOffset(0, 14)
 			p.Visible = true
 			tw(p, { Position = UDim2.fromOffset(0, 0) }, 0.24, Enum.EasingStyle.Quint)
@@ -3119,8 +2947,6 @@ local function carte(page, hauteur)
 		LayoutOrder = ordre(page), ClipsDescendants = false,
 	}, page)
 	coins(c, 16)
-	-- Fond uni et bordure fixe : le dégradé et l'animation au survol faisaient
-	-- clignoter les cartes sous BlueStacks (le survol se déclenche en boucle au défilement).
 	c.BackgroundColor3 = Color3.fromRGB(16, 16, 16)
 	creer("UIStroke", { Thickness = 1, Color = Color3.fromRGB(80, 38, 44), Transparency = 0.3, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, c)
 	creer("Frame", { Name = "AccentCarte", Size = UDim2.new(0, 3, 1, -30), Position = UDim2.fromOffset(0, 15), BackgroundColor3 = COL.ROUGE, BorderSizePixel = 0 }, c)
@@ -3412,7 +3238,6 @@ local barreC = creer("Frame", {
 }, gui)
 scaleBarre = creer("UIScale", {Scale = 1}, barreC)
 calculerEchelleEcran()
--- Barre réduite : reproduction compacte de la maquette validée.
 local barreG = creer("CanvasGroup", {
     Name = "SurfaceBarreReduite",
     Size = UDim2.fromScale(1, 1),
@@ -3428,8 +3253,6 @@ creer("UIStroke", {
     Transparency = 0.08,
     ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 }, barreG)
-
--- Fin liseré supérieur et inférieur, sans barre rouge latérale.
 creer("Frame", {
     Name = "LiseretHautBarreReduite",
     Size = UDim2.new(1, -34, 0, 1),
@@ -3438,8 +3261,6 @@ creer("Frame", {
     BackgroundTransparency = 0.55,
     BorderSizePixel = 0,
 }, barreG)
-
--- Logo circulaire : symbole blanc, comme demandé.
 local iconeB = creer("Frame", {
     Name = "LogoCirculaireReduit",
     Size = UDim2.fromOffset(32, 32),
@@ -3466,7 +3287,6 @@ local texteIconeB = texte(iconeB, {
     TextStrokeTransparency = 1,
     Visible = not LOGO_T_READY,
 })
--- Réutilise exactement l'image du logo chargée dans l'en-tête du menu.
 local logoImageReduit = creer("ImageLabel", {
     Name = "LogoTImageReduit",
     Size = UDim2.new(1, -5, 1, -5),
@@ -3480,8 +3300,6 @@ local logoImageReduit = creer("ImageLabel", {
     ZIndex = texteIconeB.ZIndex,
 }, iconeB)
 enregistrerLogoT(texteIconeB, logoImageReduit)
-
--- Séparateur vertical fin, comme sur la maquette.
 creer("Frame", {
     Name = "SeparateurLogoReduit",
     Size = UDim2.fromOffset(1, 24),
@@ -3490,7 +3308,6 @@ creer("Frame", {
     BackgroundTransparency = 0.3,
     BorderSizePixel = 0,
 }, barreG)
-
 figerTexte(texte(barreG, {
     Name = "TitreBarreReduite",
     Size = UDim2.fromOffset(91, 13),
@@ -3524,9 +3341,6 @@ figerTexte(texte(barreG, {
     TextXAlignment = Enum.TextXAlignment.Left,
     TextYAlignment = Enum.TextYAlignment.Center,
 }), "OUVRIR")
-
--- Indicateurs : deux rectangles épurés « FLING » et « CHAMS ».
--- Éteint : sombre et discret. Actif : vert (liseré, texte, fond teinté).
 local majPuces
 do
 local COULEUR_FOND_OFF = Color3.fromRGB(14, 15, 19)
@@ -3584,7 +3398,6 @@ function majPuces()
     appliquerIndicateur(rectChams, contourChams, labelChams, rolesActifs)
 end
 end
-
 local barreHit = creer("Frame", {
 	Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Active = true, ZIndex = 5,
 }, barreG)
@@ -3651,13 +3464,11 @@ lancerTache(function()
 	end
 end)
 do
--- Paramètres visuels centralisés : fréquence, épaisseur, opacité et portée.
 local TRACEUR_HZ = 20
 local TRACEUR_EPAISSEUR = 2
 local TRACEUR_TRANSPARENCE = 0.22
 local TRACEUR_DISTANCE_MAX = DISTANCE_MAX_CHAMS
 local traceurs = {}
-
 local function retirerTraceur(p)
     local ligne = traceurs[p]
     if ligne then
@@ -3665,42 +3476,32 @@ local function retirerTraceur(p)
         pcall(function() ligne:Destroy() end)
     end
 end
-
 local function nettoyerTraceurs()
     for p in pairs(traceurs) do
         retirerTraceur(p)
     end
 end
-
 connecter(Players.PlayerRemoving, retirerTraceur)
-
 local accumulateurTraceurs = 0
 local intervalleTraceurs = 1 / TRACEUR_HZ
-
 connecter(RunService.RenderStepped, function(dt)
     if fermee then
         nettoyerTraceurs()
         return
     end
-
     accumulateurTraceurs = accumulateurTraceurs + math.max(0, dt)
     if accumulateurTraceurs < intervalleTraceurs then return end
-    -- Conserve le reliquat pour stabiliser la fréquence sans accumuler de dérive.
     accumulateurTraceurs = accumulateurTraceurs % intervalleTraceurs
-
     local camera = workspace.CurrentCamera
     if not tracersActifs or not rolesActifs or not camera or not gui or not gui.Parent then
         if next(traceurs) then nettoyerTraceurs() end
         return
     end
-
-    -- Retire aussi les références devenues invalides avant de dessiner.
     for p, ligne in pairs(traceurs) do
         if not p.Parent or not ligne or not ligne.Parent then
             retirerTraceur(p)
         end
     end
-
     local viewport = camera.ViewportSize
     local origine = Vector2.new(viewport.X * 0.5, viewport.Y)
     for _, p in ipairs(Players:GetPlayers()) do
@@ -3709,7 +3510,6 @@ connecter(RunService.RenderStepped, function(dt)
         local root = personnage and personnage:FindFirstChild("HumanoidRootPart")
         local roleAutorise = role == "murder" or role == "sherif" or role == "heros"
         local dessine = false
-
         if p ~= joueur and roleAutorise and root and root:IsA("BasePart") then
             local distance = (root.Position - camera.CFrame.Position).Magnitude
             if distance <= TRACEUR_DISTANCE_MAX then
@@ -3740,7 +3540,6 @@ connecter(RunService.RenderStepped, function(dt)
                             }, ligne)
                             traceurs[p] = ligne
                         end
-
                         ligne.BackgroundColor3 = couleurRole(role)
                         ligne.Size = UDim2.fromOffset(delta.Magnitude, TRACEUR_EPAISSEUR)
                         ligne.Position = UDim2.fromOffset(
@@ -3752,12 +3551,10 @@ connecter(RunService.RenderStepped, function(dt)
                 end
             end
         end
-
         if not dessine then retirerTraceur(p) end
     end
 end)
 end
-
 local activerBooster
 do
 local boosterOriginal = nil
@@ -3858,7 +3655,6 @@ connecter(RunService.RenderStepped, function(dt)
 end)
 end
 do
-
     local ORDRE_ONGLETS = {
         { cle = "Combat",       libelle = "Combat & armes" },
         { cle = "Visuel",       libelle = "Rôles & visuel" },
@@ -4055,17 +3851,14 @@ local defsInfo = {
 	{ "Héros", COL.COULEUR_HEROS },
 	{ "Arme tombée", COL.COULEUR_ARME },
 }
-
 for i, def in ipairs(defsInfo) do
     local y = 12 + (i - 1) * 25
-
     pilule(creer("Frame", {
         Size = UDim2.fromOffset(8, 8),
         Position = UDim2.fromOffset(16, y + 5),
         BackgroundColor3 = def[2],
         BorderSizePixel = 0,
     }, carteInfo))
-
     texte(carteInfo, {
         Size = UDim2.fromOffset(110, 18),
         Position = UDim2.fromOffset(32, y),
@@ -4073,7 +3866,6 @@ for i, def in ipairs(defsInfo) do
         TextColor3 = COL.MUET,
         TextSize = 12,
     })
-
     lignesInfo[i] = texte(carteInfo, {
         Size = UDim2.new(1, -170, 0, 18),
         Position = UDim2.fromOffset(150, y),
@@ -4084,7 +3876,6 @@ for i, def in ipairs(defsInfo) do
         TextTruncate = Enum.TextTruncate.AtEnd,
     })
 end
-
 lancerTache(function()
 	local nPanneau = 0
 	while not fermee do
@@ -4181,9 +3972,6 @@ local pageTP = pages["Joueurs"]
 section(pageTP, "Liste des joueurs").LayoutOrder = 99999
 local entrees = {}
 local flingVers
--- Si on se téléporte à la main depuis le lobby, ou après être mort / éliminé, on n'est
--- PAS engagé dans la manche : l'auto farm reste en pause jusqu'au retour au lobby
--- ou jusqu'à la prochaine manche.
 flyControl.marquerArriveeManuelle = function()
     local perso0 = joueur.Character
     local hum0 = perso0 and perso0:FindFirstChildOfClass("Humanoid")
@@ -4262,12 +4050,10 @@ end
         return math.clamp(ms, 0, 600) / 1000
     end
     fonctionsFling = fonctionsFling or {}
-
     fonctionsFling.directionImpact = function(posCible, posLocale, centre)
         local ext = posCible - centre
         ext = Vector3.new(ext.X, 0, ext.Z)
         local direction
-
         if ext.Magnitude > 1 then
             direction = ext.Unit
         else
@@ -4275,10 +4061,8 @@ end
             ecart = Vector3.new(ecart.X, 0, ecart.Z)
             direction = ecart.Magnitude > 0.5 and ecart.Unit or Vector3.new(0, 0, -1)
         end
-
         return (direction + Vector3.yAxis * 0.7).Unit
     end
-
     fonctionsFling.capturerEtat = function(personnage, r, h)
         local etat = {
             personnage = personnage,
@@ -4307,7 +4091,6 @@ end
             etatHumanoide = h:GetState(),
             etats = {},
         }
-
         for _, e in ipairs({
             Enum.HumanoidStateType.FallingDown,
             Enum.HumanoidStateType.Ragdoll,
@@ -4322,7 +4105,6 @@ end
             end)
             if ok then etat.etats[e] = v end
         end
-
         for _, p in ipairs(personnage:GetDescendants()) do
             if p:IsA("BasePart") then
                 etat.parties[p] = {
@@ -4331,7 +4113,6 @@ end
                 }
             end
         end
-
         return etat
     end
     fonctionsFling.restaurerEtat = function(etat)
@@ -4646,7 +4427,6 @@ end
                 lead = lead.Unit * PORTEE_VERROU
             end
             local direction = fonctionsFling.directionImpact(posCible, racineDepart.Position, centre)
-
             local positionBase = posCible + Vector3.new(0, 0.5, 0)
             angleX = (angleX + 137) % 360
             angleY = (angleY + 191) % 360
@@ -4654,7 +4434,6 @@ end
             local rotation = CFrame.Angles(math.rad(angleX), math.rad(angleY), math.rad(angleZ))
             local cframeImpact = CFrame.new(positionBase) * rotation
             dernierOffset, dernierRot, dernierVCible = positionBase - posCible, rotation, vCible
-
             pcall(function()
                 local cam = workspace.CurrentCamera
                 if cam and cam.CameraSubject ~= hum then cam.CameraSubject = hum end
@@ -4689,7 +4468,6 @@ end
                     end
                 end)
             end
-
             local intensite = VITESSE_COLLE
             if contactAt and not envoiDetecte then
                 intensite = math.min(
@@ -4699,7 +4477,6 @@ end
             end
             pcall(function()
                 racineDepart.CFrame = cframeImpact
-
                 racineDepart.AssemblyLinearVelocity = vCible + direction * (contactAt
                     and math.min(PUISSANCE_PIC_MAX, PUISSANCE_PIC + (tNow - contactAt) * 20000)
                     or intensite)
@@ -4813,8 +4590,6 @@ connecter(Players.PlayerAdded, creerEntree)
 connecter(Players.PlayerRemoving, retirerEntree)
 lancerTache(function()
     while not fermee do
-        -- Mode Infection : même affichage que les rôles classiques, avec la détection zombie
-        -- déjà utilisée par les chams (rafraîchie 2,5 fois par seconde pour rester léger).
         local tZ = os.clock()
         if tZ >= (flyControl.prochainZombieListe or 0) then
             flyControl.prochainZombieListe = tZ + 0.4
@@ -4888,7 +4663,7 @@ flyControl.farm = {
 local function construireAutoFarm()
 local pageAF = pages["Auto Farm"]
 local farmCfg = flyControl.farm
-local VERT_ON = Color3.fromRGB(255, 20, 50) -- ancien vert, maintenant rouge vif (nom conservé pour ne rien casser)
+local VERT_ON = Color3.fromRGB(255, 20, 50)
 local GRIS_PISTE = Color3.fromRGB(60, 60, 60)
 local BLEU_PISTE = Color3.fromRGB(255, 20, 50)
 local JAUNE_PIECE = Color3.fromRGB(255, 255, 255)
@@ -5156,8 +4931,6 @@ local function estPiece(obj)
 end
 local function ajouterPiece(obj)
 	if piecesConnues[obj] then
-		-- Rafraîchit une seule fois lors d'un nouvel indexage (notamment après
-		-- une désactivation où les événements Workspace ne sont plus écoutés).
 		local transmetteur = obj:FindFirstChildOfClass("TouchTransmitter")
 		if avaitTI[obj] then
 			touchTransmitterPresent[obj] = transmetteur ~= nil
@@ -5332,8 +5105,6 @@ local function compacterListe()
 	piecesListe = neuve
 end
 local function recoltable(p)
-	-- L'index Workspace et les événements DescendantAdded/Removing maintiennent
-	-- ces états : éviter les recherches répétées pour chaque pièce à chaque tick.
 	if not piecesConnues[p] or not p.Parent then return false end
 	if avaitTI[p] and touchTransmitterPresent[p] ~= true then return false end
 	return true
@@ -5365,7 +5136,6 @@ local function positionMurder()
 			if rp then liste[#liste + 1] = rp.Position end
 		end
 	end
-
 	if flyControl.Z.mode() and flyControl.Z.estZombie(joueur) ~= true then
 		for _, p in ipairs(Players:GetPlayers()) do
 			if p ~= joueur and flyControl.Z.vivant(p) and flyControl.Z.estZombie(p) == true then
@@ -5386,7 +5156,6 @@ local function pieceDangereuse(pp, dangers)
 	end
 	return false
 end
-
 local farmeursCache, tFarmeurs = {}, 0
 local historiqueFarmeurs = setmetatable({}, { __mode = "k" })
 local INTERVALLE_SCAN_FARMEURS = 0.40
@@ -5463,37 +5232,28 @@ local function positionsFarmeurs()
 end
 local RAYON_EXCLUSION_JOUEUR = 24
 local RAYON_EXCLUSION_FARMEUR = 32
-
 local function pieceVolee(piece, pos, farmeurs)
     if not farmCfg.eviterFarmeurs or not piece or not piece.Parent then
         return false
     end
-
     local pp = piece.Position
     local dMoi = (pp - pos).Magnitude
     local seuil = dMoi - 8
-
     if seuil <= 0 then
         return false
     end
-
     local seuilCarre = seuil * seuil
     farmeurs = farmeurs or positionsFarmeurs()
-
     for i = 1, #farmeurs do
         local f = farmeurs[i]
-
         local deltaActuelle = pp - f.position
         local deltaPrevue = pp - f.positionPrevue
-
         local distanceActuelle = deltaActuelle:Dot(deltaActuelle)
         local distancePrevue = deltaPrevue:Dot(deltaPrevue)
-
         if math.min(distanceActuelle, distancePrevue) < seuilCarre then
             return true
         end
     end
-
     return false
 end
 local function choisirCible(position, murderPos)
@@ -5610,9 +5370,6 @@ local function couperPasFarm(perso)
 		for _, o in ipairs(perso:GetDescendants()) do ajouter(o) end
 		connPasFarm = connecter(perso.DescendantAdded, ajouter)
 	end
-	-- Le scan de maintien n'a pas besoin de tourner à 90 Hz : les nouveaux sons
-	-- sont coupés immédiatement par DescendantAdded, puis les sons connus sont
-	-- recontrôlés à 8 Hz pour neutraliser ceux relancés par le jeu.
 	local maintenant = os.clock()
 	if maintenant < prochainControleSonsFarm then return end
 	prochainControleSonsFarm = maintenant + 0.12
@@ -5705,7 +5462,6 @@ local function posePropre(r)
 		local ok, taille = pcall(function() return perso:GetExtentsSize() end)
 		if ok and taille then hauteurPerso = math.max(4, taille.Y) end
 	end
-
 	local sol = rayonSolide(pos + Vector3.new(0, 4, 0), Vector3.new(0, -2000, 0), params)
 	if not sol then sol = rayonSolide(pos, Vector3.new(0, -2000, 0), params) end
 	local y
@@ -5873,7 +5629,6 @@ succes = function(piece)
 	echecs = 0
 end
 local flingSacEnCours = false
-
 local function flingMurderJusquAuBout()
 	if flingSacEnCours or not farmCfg.flingFin or not flingGlobal then return end
 	flingSacEnCours = true
@@ -6058,7 +5813,6 @@ local function pas(dt)
 			resetAutoFarmSilencieux(h)
 		end
 	end
-	-- L'etat elimine verrouille les roles, mais ne doit pas bloquer le farm apres un respawn.
 	local mort = h.Health <= 0
 	local horsManche = flyControl.arriveeManuelle == true
 	local finMurder = false
@@ -6549,7 +6303,6 @@ connecter(RunService.Heartbeat, function(dt)
             cf = rp.CFrame * CFrame.new(0, 2.25, 0.1)
             souplesse = 1 - math.exp(-dt * 24)
         else
-
             local vitesseLineaire = math.clamp(orbiteVitesse * 2.2, 4, 22)
             angleOrbite = (angleOrbite + (vitesseLineaire / math.max(orbiteRayon, 1)) * dt) % (math.pi * 2)
             local centre = rp.Position + Vector3.new(0, orbiteHauteur, 0)
@@ -6559,14 +6312,12 @@ connecter(RunService.Heartbeat, function(dt)
             souplesse = 1 - math.exp(-dt * 22)
             if pisteSuivi then pcall(function() pisteSuivi:AdjustSpeed(math.clamp(vitesseLineaire / 14, 0.5, 1.6)) end) end
         end
-
         if (r.Position - cf.Position).Magnitude > 20 then souplesse = 1 end
         cf = r.CFrame:Lerp(cf, math.clamp(souplesse, 0, 1))
         r.CFrame = cf
         r.AssemblyLinearVelocity = Vector3.zero
         r.AssemblyAngularVelocity = Vector3.zero
     end)
-
     if flyControl.reinitialiserNoclipY then pcall(flyControl.reinitialiserNoclipY) end
     if reinitialiserAntiFling then pcall(reinitialiserAntiFling) end
 end)
@@ -7285,12 +7036,9 @@ local function installerGun()
         end
         return false
     end
-    -- manuel = true uniquement quand tu cliques sur le bouton GRAB.
-    -- Sans clic et avec Auto Grab Gun désactivé, aucun grab ne peut partir.
     local function grabGun(manuel)
         if not manuel and not autoGrab then return end
         if grabEnCours or flingActif then return end
-        -- Mort, éliminé ou au lobby : aucun grab.
         if joueursElimines[joueur.Name] then return end
         do
             local persoVivant = joueur.Character
@@ -7322,14 +7070,11 @@ local function installerGun()
         dernierGrab = os.clock()
         grabEnCours = true
         local toucheDisponible = typeof(firetouchinterest) == "function"
-        -- Contact 100 % à distance : aucun déplacement du personnage.
-        -- Le contact est répété à chaque frame jusqu'à ce que l'arme soit prise.
         local parties = { root }
         for _, nom in ipairs({ "UpperTorso", "Torso", "RightHand", "Right Arm", "Head" }) do
             local p = personnage:FindFirstChild(nom)
             if p and p:IsA("BasePart") then parties[#parties + 1] = p end
         end
-        -- Toutes les parties de l'arme tombée sont ciblées (celle qui porte le contact peut varier).
         local cibles = { gunDrop }
         local objetArme = flyControl.trouverGunDrop()
         if objetArme and objetArme ~= gunDrop then
@@ -7341,7 +7086,6 @@ local function installerGun()
                 end
             end
         end
-        -- Si l'arme porte un ProximityPrompt, il est déclenché aussi (instantané, sans maintien).
         local prompts = {}
         if objetArme then
             for _, d in ipairs(objetArme:GetDescendants()) do
@@ -7355,7 +7099,6 @@ local function installerGun()
                 for i = 1, #prompts do pcall(fireproximityprompt, prompts[i]) end
             end
             if toucheDisponible then
-                -- Deux salves par frame : le premier contact valide gagne la course.
                 for _ = 1, 2 do
                     for c = 1, #cibles do
                         local cible = cibles[c]
@@ -7379,7 +7122,6 @@ local function installerGun()
             statut("Impossible : contact distant non disponible", COL.ROUGE)
         else
             statut("Refusé par MM2 : le serveur exige la proximité", COL.ORANGE)
-            -- Une seule alerte par arme tombée (centre de notifications, sans pop-up).
             if gunDrop ~= derniereNotif and notifierInterface then
                 derniereNotif = gunDrop
                 pcall(notifierInterface, "Grab Gun : contact à distance refusé par le serveur", COL.ORANGE, "grab_refuse_" .. tostring(os.clock()))
@@ -7412,8 +7154,6 @@ local function installerGun()
             end
         end
     )
-    -- Réaction instantanée : dès que le GunDrop (ou l'une de ses parties) apparaît,
-    -- on lance le grab sans attendre le scan périodique.
     connecter(workspace.DescendantAdded, function(o)
         if not autoGrab then return end
         local p = o.Parent
@@ -7581,9 +7321,6 @@ local function fermerScript()
     pcall(function()
         if interface then interface.Enabled = false end
     end)
-    -- Un fling en cours doit se terminer proprement (restauration du personnage)
-    -- avant de tout couper. Il est fait en premier : les arrêts ci-dessous
-    -- annulent ensuite tout ce que la fin du fling aurait réactivé (fly, noclip...).
     pcall(function()
         local t0 = os.clock()
         while flingActif and os.clock() - t0 < 1.5 do
@@ -7641,7 +7378,6 @@ local function fermerScript()
     pcall(function()
         if interface then interface:Destroy() end
     end)
-    -- Sécurité : aucun objet du script ne doit rester dans la map ni sur ton personnage.
     pcall(function()
         for _, nom in ipairs({ "TenebresFlyVelocity", "TenebresFlyGyro", "TenebresFarmMaintien" }) do
             local perso = joueur.Character
@@ -7695,8 +7431,6 @@ local function sauvegarderPositionBarre()
             xScale = pos.X.Scale, xOffset = pos.X.Offset,
             yScale = pos.Y.Scale, yOffset = pos.Y.Offset,
         }
-        -- Écrit la position dans le même fichier que les autres préférences,
-        -- sans écraser les réglages déjà enregistrés.
         local donnees = {}
         for k, v in pairs(configChargee) do donnees[k] = v end
         for k, v in pairs(configRuntime) do donnees[k] = v end
@@ -7705,7 +7439,6 @@ local function sauvegarderPositionBarre()
         configChargee = donnees
     end)
 end
-
 local function poserBarreEnHaut()
     if barreC:GetAttribute("posee") then return end
     barreC:SetAttribute("posee", true)
@@ -7739,8 +7472,6 @@ local function majEtat()
 			if not reduit then barreC.Visible = false end
 		end)
 	else
-		-- Le tween remplace (annule) tout fondu de masquage encore en cours :
-		-- un clic rapide ne peut plus laisser la barre réduite invisible.
 		barreC.Visible = true
 		tw(barreG, { GroupTransparency = 0 }, 0.1)
 		connecterFinTween(tw(cadre, { GroupTransparency = 1 }, 0.18), function()
@@ -7831,7 +7562,6 @@ end)
 	if fermee then return end
 	conteneur.Visible = false
 	cadre.GroupTransparency = 1
-
 	local introAnnulee = false
 	local ok = pcall(function()
 		local ROUGE = Color3.fromRGB(255, 35, 68)
@@ -7842,7 +7572,6 @@ end)
 		local fini = false
 		local connexionsIntro = {}
 		local objets = {}
-
 		local function garder(obj)
 			objets[#objets + 1] = obj
 			return obj
@@ -7856,7 +7585,6 @@ end)
 		local function frame(parent, props)
 			return garder(creer("Frame", props, parent))
 		end
-
 		local voile = frame(gui, {
 			Name = "TenebresLoadingScene",
 			Size = UDim2.fromScale(1, 1),
@@ -7884,7 +7612,6 @@ end)
 				NumberSequenceKeypoint.new(1, 1),
 			}),
 		}, fondRouge))
-
 		local poussiere = {}
 		for i = 1, 10 do
 			local point = frame(voile, {
@@ -7899,7 +7626,6 @@ end)
 			arrondir(point, 10)
 			poussiere[#poussiere + 1] = point
 		end
-
 		local scene = garder(creer("CanvasGroup", {
 			Name = "TenebresLoadingCinematic",
 			AnchorPoint = Vector2.new(0.5, 0.5),
@@ -7913,7 +7639,6 @@ end)
 			MinSize = Vector2.new(300, 340),
 			MaxSize = Vector2.new(680, 390),
 		}, scene))
-
 		local centre = frame(scene, {
 			AnchorPoint = Vector2.new(0.5, 0),
 			Position = UDim2.new(0.5, 0, 0, 5),
@@ -8014,7 +7739,6 @@ end)
             ZIndex = 907,
         }, embleme))
         enregistrerLogoT(lettre, logoImageChargement)
-
 		local titre = label(scene, {
 			AnchorPoint = Vector2.new(0.5, 0),
 			Position = UDim2.new(0.5, 0, 0, 205),
@@ -8056,7 +7780,6 @@ end)
 				NumberSequenceKeypoint.new(1, 1),
 			}),
 		}, trait))
-
 		local statut = label(scene, {
 			AnchorPoint = Vector2.new(0.5, 0),
 			Position = UDim2.new(0.5, 0, 0, 292),
@@ -8114,7 +7837,6 @@ end)
 			TextXAlignment = Enum.TextXAlignment.Right,
 			ZIndex = 906,
 		})
-
 		local function progression(v, titreStatut, sousTexte)
 			v = math.clamp(v, 0, 1)
 			statut.Text = titreStatut
@@ -8128,7 +7850,6 @@ end)
 				task.wait(0.025)
 			end
 		end
-
 		tw(scene, {GroupTransparency = 0, Size = UDim2.new(0.9, 0, 0, 390)}, 0.8, Enum.EasingStyle.Back)
 		tw(voile, {BackgroundTransparency = 0.12}, 0.7, Enum.EasingStyle.Sine)
 		tw(fondRouge, {BackgroundTransparency = 0.78}, 1.4, Enum.EasingStyle.Sine)
@@ -8149,8 +7870,6 @@ end)
 				end
 			end)
 		end
-		-- Chaque anneau possède sa propre cadence : aucune nouvelle rotation
-		-- n'est lancée avant la fin de la précédente sur le même objet.
 		local function animerRotation(objet, sens, duree)
 			task.spawn(function()
 				while not fini and not introAnnulee and not fermee and objet and objet.Parent do
@@ -8177,7 +7896,6 @@ end)
 				agrandissement.Completed:Wait()
 			end
 		end)
-
 		local etapes = {
 			{0.18, "INITIALISATION", "Préparation de l'interface premium"},
 			{0.39, "SYNCHRONISATION", "Activation des composants du menu"},
@@ -8215,7 +7933,6 @@ end)
 		pcall(function() if voile and voile.Parent then voile:Destroy() end end)
 		pcall(function() if fondRouge and fondRouge.Parent then fondRouge:Destroy() end end)
 	end)
-
 	if not ok then
 		introAnnulee = true
 		pcall(function()
@@ -8227,7 +7944,6 @@ end)
 			tw(cadre, {GroupTransparency = (100 - opaciteFenetre) / 100}, 0.4)
 		end)
 	end
-    -- La barrière ne s'ouvre qu'après la fin de l'intro et les restaurations différées.
     if not fermee then
         terminerChargement()
     else
@@ -8239,14 +7955,11 @@ end)()
 do
 	DIAG.derniereHeartbeat = os.clock()
     DIAG.dernierGel = 0
-
     connecter(RunService.Heartbeat, function()
         local t = os.clock()
         local dt = t - DIAG.derniereHeartbeat
         DIAG.derniereHeartbeat = t
-
         if fermee then return end
-
         if dt > 0.35 and t - DIAG.dernierGel > 5 then
             DIAG.dernierGel = t
 			local suspect = (t - DIAG.tSuspect < 1.5) and DIAG.suspect or "aucun"
