@@ -2745,6 +2745,92 @@ local ligneEntete = creer("Frame", {
 	BackgroundColor3 = Color3.fromRGB(220, 38, 55), BorderSizePixel = 0,
 }, cadre)
 end
+-- Compteur d'utilisateurs (en ligne + total), affiché en haut à droite du menu.
+-- Service public gratuit, aucune configuration ni aucun compte : tout est automatique.
+-- Aucune donnée personnelle n'est envoyée (seulement des compteurs anonymes).
+do
+local BASE = "https://countapi.mileshilliard.com/api/v1"
+local CLE = "tnb-mm2-k3x9q7"
+local FICHIER_MARQUEUR = "tenebres_mm2_compteur.txt"
+local NB_CASES = 3
+local largeurBoite = 124
+local boiteCompteur = creer("Frame", {
+    Name = "CompteurUtilisateurs",
+    Size = UDim2.fromOffset(largeurBoite, 36),
+    Position = UDim2.new(1, -58 - 8 - largeurBoite, 0, 14),
+    BackgroundColor3 = Color3.fromRGB(20, 20, 20),
+    BorderSizePixel = 0,
+}, entete)
+coins(boiteCompteur, 8)
+creer("UIStroke", {
+    Thickness = 1, Color = Color3.fromRGB(150, 30, 45), Transparency = 0.35,
+    ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+}, boiteCompteur)
+local ligneEnLigne = texte(boiteCompteur, {
+    Size = UDim2.new(1, -12, 0, 16), Position = UDim2.fromOffset(8, 3),
+    Text = "● — EN LIGNE", Font = Enum.Font.GothamBold, TextSize = 10,
+    TextColor3 = Color3.fromRGB(60, 240, 120),
+})
+local ligneTotal = texte(boiteCompteur, {
+    Size = UDim2.new(1, -12, 0, 14), Position = UDim2.fromOffset(8, 19),
+    Text = "— UTILISATEURS", Font = Enum.Font.GothamMedium, TextSize = 9,
+    TextColor3 = COL.MUET,
+})
+local function lireValeur(chemin)
+    local ok, corps = pcall(function() return game:HttpGet(BASE .. chemin) end)
+    if not ok or type(corps) ~= "string" then return nil end
+    local ok2, donnees = pcall(function() return HttpService:JSONDecode(corps) end)
+    if not ok2 or type(donnees) ~= "table" then return nil end
+    return tonumber(donnees.value)
+end
+local peutEcrire = type(writefile) == "function" and type(isfile) == "function"
+local dejaCompte = false
+if peutEcrire then
+    local ok, existe = pcall(isfile, FICHIER_MARQUEUR)
+    dejaCompte = ok and existe == true
+end
+local dernierBucket = nil
+local function synchroniser()
+    -- EN LIGNE : chaque script actif ajoute 1 à la case de la minute en cours (une fois par minute).
+    -- Trois cases tournantes, remises à zéro à l'avance : le compteur reste léger et se « vide » tout seul.
+    local bucket = math.floor(os.time() / 60)
+    local courant
+    if bucket ~= dernierBucket then
+        dernierBucket = bucket
+        courant = lireValeur("/hit/" .. CLE .. "-l" .. (bucket % NB_CASES))
+        lireValeur("/set/" .. CLE .. "-l" .. ((bucket + 1) % NB_CASES) .. "?value=0")
+    else
+        courant = lireValeur("/get/" .. CLE .. "-l" .. (bucket % NB_CASES))
+    end
+    local precedent = lireValeur("/get/" .. CLE .. "-l" .. ((bucket - 1) % NB_CASES)) or 0
+    local vivants = math.max(courant or 0, precedent, 1)
+    -- TOTAL : chaque installation n'est comptée qu'une seule fois (marqueur local).
+    local ajoute = nil
+    if peutEcrire and not dejaCompte then
+        ajoute = lireValeur("/hit/" .. CLE .. "-total")
+        if ajoute then
+            dejaCompte = true
+            pcall(writefile, FICHIER_MARQUEUR, "1")
+        end
+    end
+    local total = lireValeur("/get/" .. CLE .. "-total") or ajoute
+    return vivants, total
+end
+lancerTache(function()
+    task.wait(2)
+    while not fermee do
+        local ok, vivants, total = pcall(synchroniser)
+        if ok and vivants and not fermee then
+            ligneEnLigne.Text = "● " .. tostring(vivants) .. " EN LIGNE"
+            ligneTotal.Text = (total and tostring(total) or "—") .. " UTILISATEURS"
+        end
+        for _ = 1, 30 do
+            if fermee then break end
+            task.wait(1)
+        end
+    end
+end)
+end
 local lateral = creer("Frame", {
 	Size = UDim2.new(0, LARGEUR_LATERAL, 1, -HAUT_ENTETE - 1), Position = UDim2.fromOffset(0, HAUT_ENTETE + 1),
 	BackgroundColor3 = COL.LATERAL, BackgroundTransparency = 0.25, BorderSizePixel = 0,
@@ -7435,6 +7521,7 @@ local function fermerScript()
         rolesActifs, armeActive, nomsActifs, flyControl.Z.actif = false, false, false, false
         if nettoyerChams then nettoyerChams() end
     end)
+    pcall(function() if flyControl.compteurQuitter then flyControl.compteurQuitter() end end)
     scriptFerme = true
     for connexion in pairs(connexionsGlobales) do
         pcall(function() connexion:Disconnect() end)
