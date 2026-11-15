@@ -2753,28 +2753,94 @@ local BASE = "https://countapi.mileshilliard.com/api/v1"
 local CLE = "tnb-mm2-k3x9q7"
 local FICHIER_MARQUEUR = "tenebres_mm2_compteur.txt"
 local NB_CASES = 3
-local largeurBoite = 124
+-- Carte communauté : compacte, mieux hiérarchisée et assortie au thème rouge/noir.
+local largeurBoite = 166
 local boiteCompteur = creer("Frame", {
     Name = "CompteurUtilisateurs",
-    Size = UDim2.fromOffset(largeurBoite, 36),
-    Position = UDim2.new(1, -58 - 8 - largeurBoite, 0, 14),
-    BackgroundColor3 = Color3.fromRGB(20, 20, 20),
+    Size = UDim2.fromOffset(largeurBoite, 42),
+    Position = UDim2.new(1, -58 - 12 - largeurBoite, 0, 11),
+    BackgroundColor3 = Color3.fromRGB(13, 13, 15),
     BorderSizePixel = 0,
 }, entete)
-coins(boiteCompteur, 8)
+boiteCompteur.ClipsDescendants = true
+coins(boiteCompteur, 10)
+
 creer("UIStroke", {
-    Thickness = 1, Color = Color3.fromRGB(150, 30, 45), Transparency = 0.35,
+    Thickness = 1,
+    Color = Color3.fromRGB(112, 34, 43),
+    Transparency = 0.18,
     ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 }, boiteCompteur)
+
+creer("UIGradient", {
+    Rotation = 0,
+    Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(24, 15, 18)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(10, 10, 12)),
+    }),
+}, boiteCompteur)
+
+-- Petit indicateur lumineux indépendant du texte : plus net et plus élégant.
+local pointEnLigne = creer("Frame", {
+    Name = "PointEnLigne",
+    Size = UDim2.fromOffset(6, 6),
+    Position = UDim2.fromOffset(11, 9),
+    BackgroundColor3 = Color3.fromRGB(75, 220, 125),
+    BorderSizePixel = 0,
+}, boiteCompteur)
+coins(pointEnLigne, 99)
+
 local ligneEnLigne = texte(boiteCompteur, {
-    Size = UDim2.new(1, -12, 0, 16), Position = UDim2.fromOffset(8, 3),
-    Text = "● — EN LIGNE", Font = Enum.Font.GothamBold, TextSize = 10,
-    TextColor3 = Color3.fromRGB(60, 240, 120),
+    Name = "ValeurEnLigne",
+    Size = UDim2.fromOffset(58, 19),
+    Position = UDim2.fromOffset(23, 3),
+    Text = "—",
+    Font = Enum.Font.GothamBold,
+    TextSize = 15,
+    TextColor3 = Color3.fromRGB(245, 245, 247),
+    TextYAlignment = Enum.TextYAlignment.Center,
 })
+
+texte(boiteCompteur, {
+    Name = "LibelleEnLigne",
+    Size = UDim2.fromOffset(62, 12),
+    Position = UDim2.fromOffset(23, 23),
+    Text = "EN LIGNE",
+    Font = Enum.Font.GothamSemibold,
+    TextSize = 8,
+    TextColor3 = Color3.fromRGB(135, 135, 143),
+    TextYAlignment = Enum.TextYAlignment.Center,
+})
+
+creer("Frame", {
+    Name = "SeparateurCompteur",
+    Size = UDim2.fromOffset(1, 24),
+    Position = UDim2.fromOffset(91, 9),
+    BackgroundColor3 = Color3.fromRGB(75, 49, 54),
+    BackgroundTransparency = 0.25,
+    BorderSizePixel = 0,
+}, boiteCompteur)
+
 local ligneTotal = texte(boiteCompteur, {
-    Size = UDim2.new(1, -12, 0, 14), Position = UDim2.fromOffset(8, 19),
-    Text = "— UTILISATEURS", Font = Enum.Font.GothamMedium, TextSize = 9,
-    TextColor3 = COL.MUET,
+    Name = "ValeurTotal",
+    Size = UDim2.new(1, -103, 0, 17),
+    Position = UDim2.fromOffset(101, 5),
+    Text = "—",
+    Font = Enum.Font.GothamBold,
+    TextSize = 13,
+    TextColor3 = Color3.fromRGB(235, 235, 238),
+    TextYAlignment = Enum.TextYAlignment.Center,
+})
+
+texte(boiteCompteur, {
+    Name = "LibelleTotal",
+    Size = UDim2.new(1, -103, 0, 12),
+    Position = UDim2.fromOffset(101, 23),
+    Text = "MEMBRES",
+    Font = Enum.Font.GothamSemibold,
+    TextSize = 8,
+    TextColor3 = Color3.fromRGB(135, 135, 143),
+    TextYAlignment = Enum.TextYAlignment.Center,
 })
 local function lireValeur(chemin)
     local ok, corps = pcall(function() return game:HttpGet(BASE .. chemin) end)
