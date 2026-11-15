@@ -1421,10 +1421,21 @@ do
 		cache = workspace:FindFirstChild("GunDrop", true)
 		return cache
 	end
+	local hubArme, hubPerso = {}, {}
+	flyControl.hubArme, flyControl.hubPerso = hubArme, hubPerso
 	connecter(workspace.DescendantAdded, function(o)
-		if o.Name == "GunDrop" then
+		local nom = o.Name
+		if nom == "GunDrop" then
 			cache = o
 			derniereRecherche = os.clock()
+			for i = 1, #hubArme do hubArme[i](o) end
+		elseif nom == "HumanoidRootPart" or nom == "Humanoid" then
+			for i = 1, #hubPerso do hubPerso[i](o) end
+		elseif #hubArme > 0 then
+			local p = o.Parent
+			if p and p.Name == "GunDrop" then
+				for i = 1, #hubArme do hubArme[i](o) end
+			end
 		end
 	end)
 end
@@ -2161,15 +2172,12 @@ function nettoyerChams()
 	for p in pairs(etiquettes) do retirerEtiquette(p) end
 	retirerArme()
 end
-connecter(workspace.DescendantAdded, function(obj)
+table.insert(flyControl.hubArme, function(obj)
 	if fermee or not armeActive then return end
-	local p = obj.Parent
-	if obj.Name == "GunDrop" or (p and p.Name == "GunDrop") then
-		armeCache, objetArmeCache, tRechercheArme = nil, nil, 0
-		task.defer(function()
-			if not fermee then DIAG.mesure("arme", majArme) end
-		end)
-	end
+	armeCache, objetArmeCache, tRechercheArme = nil, nil, 0
+	task.defer(function()
+		if not fermee then DIAG.mesure("arme", majArme) end
+	end)
 end)
 local majImmediateEnAttente = false
 local function majImmediate()
@@ -2218,16 +2226,14 @@ local function surveillerArmes(p)
     connecter(p.CharacterAdded, function(c) perso(c) declencherMajImmediate() end)
 end
 flyControl.majVisuelsMaintenant = declencherMajImmediate
-connecter(workspace.DescendantAdded, function(o)
+table.insert(flyControl.hubPerso, function(o)
 	if fermee or not (rolesActifs or nomsActifs) then return end
-	if o.Name == "HumanoidRootPart" or o:IsA("Humanoid") then
-		local modele = o.Parent
-		local p = modele and Players:GetPlayerFromCharacter(modele)
-		if p and p ~= joueur then
-			task.defer(function()
-				if not fermee then pcall(majVisuel, p) end
-			end)
-		end
+	local modele = o.Parent
+	local p = modele and Players:GetPlayerFromCharacter(modele)
+	if p and p ~= joueur then
+		task.defer(function()
+			if not fermee then pcall(majVisuel, p) end
+		end)
 	end
 end)
 connecter(joueur.CharacterAdded, function()
@@ -2242,7 +2248,7 @@ connecter(Players.PlayerAdded, surveillerArmes)
 connecter(workspace.DescendantRemoving, function(o)
     if not fermee and o.Name == "GunDrop" then declencherMajImmediate() end
 end)
-connecter(workspace.DescendantAdded, function(o)
+table.insert(flyControl.hubArme, function(o)
     if not fermee and o.Name == "GunDrop" then declencherMajImmediate() end
 end)
 lancerTache(function()
@@ -7154,16 +7160,13 @@ local function installerGun()
             end
         end
     )
-    connecter(workspace.DescendantAdded, function(o)
+    table.insert(flyControl.hubArme, function(o)
         if not autoGrab then return end
-        local p = o.Parent
-        if o.Name == "GunDrop" or (p and p.Name == "GunDrop") then
-            armeCache = nil
-            derniereRecherche = 0
-            dernierGrab = 0
-            if not grabEnCours and not suisMurder() and not possedeGun() then
-                grabGun()
-            end
+        armeCache = nil
+        derniereRecherche = 0
+        dernierGrab = 0
+        if not grabEnCours and not suisMurder() and not possedeGun() then
+            grabGun()
         end
     end)
     lancerTache(function()
