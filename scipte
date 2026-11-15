@@ -7086,7 +7086,10 @@ local function installerGun()
         end
         return false
     end
-    local function grabGun()
+    -- manuel = true uniquement quand tu cliques sur le bouton GRAB.
+    -- Sans clic et avec Auto Grab Gun désactivé, aucun grab ne peut partir.
+    local function grabGun(manuel)
+        if not manuel and not autoGrab then return end
         if grabEnCours or flingActif then return end
         -- Mort, éliminé ou au lobby : aucun grab.
         if joueursElimines[joueur.Name] then return end
@@ -7168,6 +7171,7 @@ local function installerGun()
             end
             RunService.Heartbeat:Wait()
         until possedeGun() or fermee or not gunDrop.Parent
+            or (not manuel and not autoGrab)
             or humanoide.Health <= 0 or joueursElimines[joueur.Name] or os.clock() - debut >= DUREE_MAX_GRAB
         if possedeGun() then
             statut("Revolver récupéré !", COL.VERT)
@@ -7192,7 +7196,7 @@ local function installerGun()
         "GRAB",
         COL.VIOLET,
         function()
-            grabGun()
+            grabGun(true)
         end
     )
     interrupteur(
