@@ -7027,8 +7027,9 @@ construireExtras()
 local function installerGun()
     local pageGun = pages["Combat"]
     local DISTANCE_MAX = 1000
-    local COOLDOWN_GRAB = 1.5
-    local INTERVALLE_SCAN = 0.5
+    local COOLDOWN_GRAB = 0.2
+    local INTERVALLE_SCAN = 0.02
+    local DUREE_MAX_GRAB = 0.5
     local autoGrab = false
     local grabEnCours = false
     local dernierGrab = 0
@@ -7044,7 +7045,7 @@ local function installerGun()
             return armeCache
         end
         local maintenant = os.clock()
-        if maintenant - derniereRecherche < 0.25 then
+        if maintenant - derniereRecherche < 0.05 then
             return nil
         end
         derniereRecherche = maintenant
@@ -7085,7 +7086,7 @@ local function installerGun()
         return false
     end
     local function grabGun()
-        if grabEnCours then return end
+        if grabEnCours or flingActif then return end
         if os.clock() - dernierGrab < COOLDOWN_GRAB then
             return
         end
@@ -7106,17 +7107,27 @@ local function installerGun()
             statut("Personnage indisponible", COL.ROUGE)
             return
         end
-        local distance = (root.Position - gunDrop.Position).Magnitude
-        afficherArme(string.format("Arme : GunDrop · %.1f studs", distance))
         dernierGrab = os.clock()
         grabEnCours = true
-        statut("Tentative à distance — sans déplacement", COL.ORANGE)
         local toucheDisponible = typeof(firetouchinterest) == "function"
-        if toucheDisponible and gunDrop.Parent then
-            pcall(firetouchinterest, root, gunDrop, 0)
-            pcall(firetouchinterest, root, gunDrop, 1)
+        -- Contact 100 % à distance : aucun déplacement du personnage.
+        -- Le contact est répété à chaque frame jusqu'à ce que l'arme soit prise.
+        local parties = { root }
+        for _, nom in ipairs({ "UpperTorso", "Torso", "RightHand", "Right Arm", "Head" }) do
+            local p = personnage:FindFirstChild(nom)
+            if p and p:IsA("BasePart") then parties[#parties + 1] = p end
         end
-        task.wait(0.7)
+        local debut = os.clock()
+        repeat
+            if toucheDisponible and gunDrop.Parent then
+                for i = 1, #parties do
+                    pcall(firetouchinterest, parties[i], gunDrop, 0)
+                    pcall(firetouchinterest, parties[i], gunDrop, 1)
+                end
+            end
+            RunService.Heartbeat:Wait()
+        until possedeGun() or fermee or not gunDrop.Parent
+            or humanoide.Health <= 0 or os.clock() - debut >= DUREE_MAX_GRAB
         if possedeGun() then
             statut("Revolver récupéré !", COL.VERT)
             afficherArme("Arme : dans ton inventaire")
@@ -7131,7 +7142,7 @@ local function installerGun()
     carteBouton(
         pageGun,
         "Grab Gun",
-        "Tente le contact à distance sans déplacer ton personnage (le serveur peut refuser)",
+        "Contact à distance rapide, sans déplacer ton personnage (le serveur peut refuser)",
         "GRAB",
         COL.VIOLET,
         function()
@@ -7152,6 +7163,23 @@ local function installerGun()
             end
         end
     )
+    -- Réaction instantanée : dès que le GunDrop (ou l'une de ses parties) apparaît,
+    -- on lance le grab sans attendre le scan périodique.
+    connecter(workspace.DescendantAdded, function(o)
+        if not autoGrab then return end
+        local p = o.Parent
+        if o.Name == "GunDrop" or (p and p.Name == "GunDrop") then
+            armeCache = nil
+            derniereRecherche = 0
+            dernierGrab = 0
+            task.spawn(function()
+                if autoGrab and not fermee and not grabEnCours
+                    and not suisMurder() and not possedeGun() then
+                    grabGun()
+                end
+            end)
+        end
+    end)
     lancerTache(function()
         while not fermee do
             if autoGrab then
