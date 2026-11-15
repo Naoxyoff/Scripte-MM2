@@ -7027,9 +7027,9 @@ construireExtras()
 local function installerGun()
     local pageGun = pages["Combat"]
     local DISTANCE_MAX = 1000
-    local COOLDOWN_GRAB = 0.2
-    local INTERVALLE_SCAN = 0.02
-    local DUREE_MAX_GRAB = 0.5
+    local COOLDOWN_GRAB = 0.05
+    local INTERVALLE_SCAN = 0
+    local DUREE_MAX_GRAB = 1.5
     local autoGrab = false
     local grabEnCours = false
     local dernierGrab = 0
@@ -7045,7 +7045,7 @@ local function installerGun()
             return armeCache
         end
         local maintenant = os.clock()
-        if maintenant - derniereRecherche < 0.05 then
+        if maintenant - derniereRecherche < 0.02 then
             return nil
         end
         derniereRecherche = maintenant
@@ -7117,12 +7117,32 @@ local function installerGun()
             local p = personnage:FindFirstChild(nom)
             if p and p:IsA("BasePart") then parties[#parties + 1] = p end
         end
+        -- Toutes les parties de l'arme tombée sont ciblées (celle qui porte le contact peut varier).
+        local cibles = { gunDrop }
+        local objetArme = flyControl.trouverGunDrop()
+        if objetArme and objetArme ~= gunDrop then
+            if objetArme:IsA("BasePart") then
+                cibles[#cibles + 1] = objetArme
+            else
+                for _, d in ipairs(objetArme:GetDescendants()) do
+                    if d:IsA("BasePart") and d ~= gunDrop then cibles[#cibles + 1] = d end
+                end
+            end
+        end
         local debut = os.clock()
         repeat
-            if toucheDisponible and gunDrop.Parent then
-                for i = 1, #parties do
-                    pcall(firetouchinterest, parties[i], gunDrop, 0)
-                    pcall(firetouchinterest, parties[i], gunDrop, 1)
+            if toucheDisponible then
+                -- Deux salves par frame : le premier contact valide gagne la course.
+                for _ = 1, 2 do
+                    for c = 1, #cibles do
+                        local cible = cibles[c]
+                        if cible.Parent then
+                            for i = 1, #parties do
+                                pcall(firetouchinterest, parties[i], cible, 0)
+                                pcall(firetouchinterest, parties[i], cible, 1)
+                            end
+                        end
+                    end
                 end
             end
             RunService.Heartbeat:Wait()
@@ -7172,12 +7192,9 @@ local function installerGun()
             armeCache = nil
             derniereRecherche = 0
             dernierGrab = 0
-            task.spawn(function()
-                if autoGrab and not fermee and not grabEnCours
-                    and not suisMurder() and not possedeGun() then
-                    grabGun()
-                end
-            end)
+            if not grabEnCours and not suisMurder() and not possedeGun() then
+                grabGun()
+            end
         end
     end)
     lancerTache(function()
