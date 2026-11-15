@@ -2732,12 +2732,8 @@ local function lireValeur(chemin)
     if not ok2 or type(donnees) ~= "table" then return nil end
     return tonumber(donnees.value)
 end
-local peutEcrire = type(writefile) == "function" and type(isfile) == "function"
-local dejaCompte = false
-if peutEcrire then
-    local ok, existe = pcall(isfile, FICHIER_MARQUEUR)
-    dejaCompte = ok and existe == true
-end
+local compteDejaVerifie = false
+local totalEnAttente = false
 local dernierBucket = nil
 local function synchroniser()
     local bucket = math.floor(os.time() / 60)
@@ -2752,14 +2748,18 @@ local function synchroniser()
     local precedent = lireValeur("/get/" .. CLE .. "-l" .. ((bucket - 1) % NB_CASES)) or 0
     local vivants = math.max(courant or 0, precedent, 1)
     local ajoute = nil
-    if peutEcrire and not dejaCompte then
-        ajoute = lireValeur("/hit/" .. CLE .. "-total")
-        if ajoute then
-            dejaCompte = true
-            pcall(writefile, FICHIER_MARQUEUR, "1")
+    if not compteDejaVerifie then
+        local passages = lireValeur("/hit/" .. CLE .. "-u" .. tostring(joueur.UserId))
+        if passages then
+            compteDejaVerifie = true
+            if passages == 1 then totalEnAttente = true end
         end
     end
-    local total = lireValeur("/get/" .. CLE .. "-total") or ajoute
+    if totalEnAttente then
+        ajoute = lireValeur("/hit/" .. CLE .. "-comptes")
+        if ajoute then totalEnAttente = false end
+    end
+    local total = lireValeur("/get/" .. CLE .. "-comptes") or ajoute
     return vivants, total
 end
 lancerTache(function()
