@@ -374,13 +374,8 @@ end
 local flyControl
 local stopperEmoteActuelle = nil
 do
-local VITESSE_HORIZONTALE_MAX = 120
-local VITESSE_CHUTE_MAX = 450
-local ROTATION_MAX = 60
-local DISTANCE_RETOUR = 15
-local PAS_POSITION_SURE = 0.25
-local derniereSure = nil
-local derniereMaj = 0
+local VITESSE_HORIZONTALE_MAX = 300
+local ROTATION_MAX = 80
 local suivis = {}
 local joueursSurveilles = setmetatable({}, { __mode = "k" })
 local function desactiverPiece(info, p)
@@ -462,12 +457,10 @@ local function restaurerCollisions()
 end
 local function nouveauPersonnage(perso)
 	racine, humanoide = nil, nil
-	derniereSure = nil
 	local r = perso:WaitForChild("HumanoidRootPart", 10)
 	local h = perso:WaitForChild("Humanoid", 10)
 	if not r or not h or joueur.Character ~= perso then return end
 	racine, humanoide = r, h
-	if actif then derniereSure = r.CFrame end
 end
 local debutVieStats = nil
 local personnagesSurvieSuivis = setmetatable({}, { __mode = "k" })
@@ -492,7 +485,6 @@ if joueur.Character then lancerTache(suivreSurvieStats, joueur.Character) end
 connecter(joueur.CharacterAdded, nouveauPersonnage)
 connecter(joueur.CharacterRemoving, function()
 	racine, humanoide = nil, nil
-	derniereSure = nil
 end)
 if joueur.Character then lancerTache(nouveauPersonnage, joueur.Character) end
 restaurerApresChargement(function()
@@ -510,65 +502,30 @@ function definirActif(valeur)
 				suivre(autre, autre.Character)
 			end
 		end
-		derniereSure = racine and racine.CFrame or nil
-		derniereMaj = os.clock()
 	else
 		restaurerCollisions()
 	end
 end
-reinitialiserAntiFling = function()
-	if actif then
-		derniereSure = racine and racine.CFrame or nil
-		derniereMaj = os.clock()
-	end
-end
-local prochainControleCollisionsAntiFling = 0
+reinitialiserAntiFling = function() end
 connecter(RunService.Stepped, function()
 	if not actif then return end
-	local maintenant = os.clock()
-	if maintenant >= prochainControleCollisionsAntiFling then
-		prochainControleCollisionsAntiFling = maintenant + 0.12
-		for _, info in pairs(suivis) do
-			local liste = info.liste
-			for i = 1, #liste do
-				local p = liste[i]
-				if p and p.Parent and p.CanCollide then p.CanCollide = false end
-			end
+	for _, info in pairs(suivis) do
+		local liste = info.liste
+		for i = 1, #liste do
+			local p = liste[i]
+			if p.Parent and p.CanCollide then p.CanCollide = false end
 		end
 	end
-	if not racine or not racine.Parent or not humanoide then return end
-	local etat = humanoide:GetState()
-	if humanoide.Health <= 0
-		or etat == Enum.HumanoidStateType.Dead
-		or etat == Enum.HumanoidStateType.FallingDown
-		or etat == Enum.HumanoidStateType.Ragdoll then
-		return
-	end
+	if not racine or not racine.Parent or not humanoide or humanoide.Health <= 0 then return end
 	if flingActif or (flyControl and (flyControl.flyOn or flyControl.farmActif or flyControl.suiviActif)) then
-		derniereSure = racine.CFrame
-		derniereMaj = os.clock()
 		return
 	end
 	local vel = racine.AssemblyLinearVelocity
-	local vitesseHorizontale = Vector3.new(vel.X, 0, vel.Z).Magnitude
-	local montee = vel.Y
-	local chute = -vel.Y
-	if vitesseHorizontale > VITESSE_HORIZONTALE_MAX
-		or montee > VITESSE_HORIZONTALE_MAX
-		or chute > VITESSE_CHUTE_MAX
-		or racine.AssemblyAngularVelocity.Magnitude > ROTATION_MAX then
-		racine.AssemblyLinearVelocity = Vector3.zero
+	if racine.AssemblyAngularVelocity.Magnitude > ROTATION_MAX then
 		racine.AssemblyAngularVelocity = Vector3.zero
-		if derniereSure and (racine.Position - derniereSure.Position).Magnitude > DISTANCE_RETOUR then
-			racine.CFrame = derniereSure
-		end
-	else
-		local t = os.clock()
-		if t - derniereMaj >= PAS_POSITION_SURE
-			and humanoide.FloorMaterial ~= Enum.Material.Air then
-			derniereSure = racine.CFrame
-			derniereMaj = t
-		end
+	end
+	if Vector3.new(vel.X, 0, vel.Z).Magnitude > VITESSE_HORIZONTALE_MAX then
+		racine.AssemblyLinearVelocity = Vector3.new(0, vel.Y, 0)
 	end
 end)
 end
@@ -1735,10 +1692,26 @@ function retirerHalo(joueurCible)
 	halos[joueurCible] = nil
 	retirerBoite(joueurCible)
 end
+local nomNatifOrigine = setmetatable({}, { __mode = "k" })
+local function masquerNomNatif(hum)
+	if not hum or not hum.Parent then return end
+	if nomNatifOrigine[hum] == nil then
+		nomNatifOrigine[hum] = hum.DisplayDistanceType
+	end
+	if hum.DisplayDistanceType ~= Enum.HumanoidDisplayDistanceType.None then
+		hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+	end
+end
 function retirerEtiquette(joueurCible)
 	local e = etiquettes[joueurCible]
 	if e then e:Destroy() end
 	etiquettes[joueurCible] = nil
+	local perso = joueurCible and joueurCible.Character
+	local hum = perso and perso:FindFirstChildOfClass("Humanoid")
+	if hum and nomNatifOrigine[hum] ~= nil then
+		pcall(function() hum.DisplayDistanceType = nomNatifOrigine[hum] end)
+		nomNatifOrigine[hum] = nil
+	end
 end
 local function creerPastille(adornee, parent, decalage, largeur, avecVie)
 	local b = Instance.new("BillboardGui")
@@ -2052,6 +2025,7 @@ local function majVisuel(joueurCible)
 	local pseudoVisible = nomsActifs and tete ~= nil and racine ~= nil and not estAuLobbyPourChams()
 		and hum.Health > 0 and distance <= DISTANCE_MAX_PSEUDO
 	if pseudoVisible then
+		masquerNomNatif(hum)
 		local e = etiquettes[joueurCible]
 		if not e or not e.Parent or e.Adornee ~= tete then
 			if e then e:Destroy() end
