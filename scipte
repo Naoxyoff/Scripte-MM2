@@ -692,6 +692,7 @@ local function restaurerAnimationsFly()
 end
 local noclipOriginal = {}
 local noclipVisualOriginal = {}
+local noclipListe = {}
 local noclipAddedConnection = nil
 local noclipCharacter = nil
 local noclipRefY = nil
@@ -829,12 +830,16 @@ local function viderNoclip()
     for part in pairs(noclipVisualOriginal) do oublierNoclipPart(part, true) end
     table.clear(noclipOriginal)
     table.clear(noclipVisualOriginal)
+    table.clear(noclipListe)
     noclipRefY = nil
     noclipCharacter = nil
 end
 local function appliquerNoclipPart(part)
     if not noclipOn or not part or not part:IsA("BasePart") then return end
-    if noclipOriginal[part] == nil then noclipOriginal[part] = part.CanCollide end
+    if noclipOriginal[part] == nil then
+        noclipOriginal[part] = part.CanCollide
+        noclipListe[#noclipListe + 1] = part
+    end
     if noclipVisualOriginal[part] == nil then noclipVisualOriginal[part] = part.LocalTransparencyModifier end
     part.CanCollide = false
     part.LocalTransparencyModifier = noclipTransparence
@@ -847,21 +852,32 @@ local function attacherNoclip(character)
     noclipAddedConnection = connecter(character.DescendantAdded, appliquerNoclipPart)
     noclipRefY = racine and racine.Position.Y or nil
 end
-local prochainControleNoclip = 0
-connecter(RunService.Stepped, function()
-    if fermee or not noclipOn then return end
-    local maintenant = os.clock()
-    if maintenant >= prochainControleNoclip then
-        prochainControleNoclip = maintenant + 0.12
-        for part in pairs(noclipOriginal) do
-            if part.Parent then
-                if part.CanCollide then part.CanCollide = false end
-            else
+local function imposerNoclip()
+    local i = 1
+    local n = #noclipListe
+    while i <= n do
+        local part = noclipListe[i]
+        if part.Parent and noclipOriginal[part] ~= nil then
+            if part.CanCollide then part.CanCollide = false end
+            i = i + 1
+        else
+            if not part.Parent then
                 noclipOriginal[part] = nil
                 noclipVisualOriginal[part] = nil
             end
+            noclipListe[i] = noclipListe[n]
+            noclipListe[n] = nil
+            n = n - 1
         end
     end
+end
+connecter(RunService.Heartbeat, function()
+    if fermee or not noclipOn then return end
+    imposerNoclip()
+end)
+connecter(RunService.Stepped, function()
+    if fermee or not noclipOn then return end
+    imposerNoclip()
     if not racine or not racine.Parent then return end
     local y = racine.Position.Y
     if humanoide and humanoide.FloorMaterial ~= Enum.Material.Air then
@@ -7104,7 +7120,10 @@ local champRecherche = creer("TextBox", {
 }, carteRecherche)
 coins(champRecherche, 8)
 creer("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }, champRecherche)
+local compteurCreationEmotes = 0
 local function creerEntreeEmote(emote, favoriVue)
+    compteurCreationEmotes = compteurCreationEmotes + 1
+    if compteurCreationEmotes % 6 == 0 and not fermee then task.wait() end
     local c = carte(pageEmotes, 56)
     texte(c, {
         Size = UDim2.new(1, -196, 0, 18), Position = UDim2.fromOffset(22, 10),
