@@ -2678,7 +2678,7 @@ local BASE = "https://countapi.mileshilliard.com/api/v1"
 local CLE = "tnb-mm2-k3x9q7"
 local FICHIER_MARQUEUR = "tenebres_mm2_compteur.txt"
 local NB_CASES = 4
-local DUREE_FENETRE = 60
+local DUREE_FENETRE = 20
 local CLE_LIVE = "tnb4"
 local largeurBoite = 170
 local hauteurBoite = 44
@@ -2840,8 +2840,15 @@ local function enParallele(fonctions)
     return resultats
 end
 local incrementEnAttente = nil
+local function horlogeCommune()
+    local ok, t = pcall(function() return workspace:GetServerTimeNow() end)
+    if ok and type(t) == "number" and t > 1000000000 then return math.floor(t) end
+    return os.time()
+end
+local dernierRapportCompteur = nil
+local nbRapportsCompteur = 0
 local function synchroniserVivants()
-    local bucket = math.floor(os.time() / DUREE_FENETRE)
+    local bucket = math.floor(horlogeCommune() / DUREE_FENETRE)
     local courant = nil
     if bucket ~= dernierBucket then
         if incrementEnAttente ~= bucket then
@@ -2870,7 +2877,20 @@ local function synchroniserVivants()
     })
     local actuel, precedent = res[1] or courant or 0, res[2] or 0
     if actuel > 0 or precedent > 0 then
-        afficherVivants(math.max(actuel, precedent, 1))
+        local ageFenetre = horlogeCommune() % DUREE_FENETRE
+        local rapport = tostring(actuel) .. "/" .. tostring(precedent)
+        if rapport ~= dernierRapportCompteur and nbRapportsCompteur < 6 then
+            dernierRapportCompteur = rapport
+            nbRapportsCompteur = nbRapportsCompteur + 1
+            if DIAG and DIAG.consigner then
+                pcall(DIAG.consigner, string.format("Compteur : fenêtre %d · actuelle %d · précédente %d", bucket, actuel, precedent))
+            end
+        end
+        if ageFenetre >= 12 then
+            afficherVivants(math.max(actuel, 1))
+        else
+            afficherVivants(math.max(actuel, precedent, 1))
+        end
         return true
     end
     return false
@@ -2899,7 +2919,7 @@ lancerTache(function()
         local ok, r = pcall(synchroniserVivants)
         reussi = ok and r == true
         sauverCacheCompteur()
-        for _ = 1, (reussi and 20 or 5) do
+        for _ = 1, (reussi and 10 or 5) do
             if fermee then break end
             task.wait(1)
         end
