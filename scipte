@@ -2606,7 +2606,9 @@ do
 local BASE = "https://countapi.mileshilliard.com/api/v1"
 local CLE = "tnb-mm2-k3x9q7"
 local FICHIER_MARQUEUR = "tenebres_mm2_compteur.txt"
-local NB_CASES = 3
+local NB_CASES = 4
+local DUREE_FENETRE = 120
+local CLE_LIVE = CLE .. "-v2"
 local largeurBoite = 170
 local hauteurBoite = 44
 local boiteCompteur = creer("Frame", {
@@ -2700,29 +2702,96 @@ texte(boiteCompteur, {
     TextYAlignment = Enum.TextYAlignment.Center,
     ZIndex = 6,
 })
+local compteurRequete = 0
 local function lireValeur(chemin)
-    local ok, corps = pcall(function() return game:HttpGet(BASE .. chemin) end)
-    if not ok or type(corps) ~= "string" then return nil end
-    local ok2, donnees = pcall(function() return HttpService:JSONDecode(corps) end)
-    if not ok2 or type(donnees) ~= "table" then return nil end
-    return tonumber(donnees.value)
+    compteurRequete = compteurRequete + 1
+    local separateur = string.find(chemin, "?", 1, true) and "&" or "?"
+    local urls = {
+        BASE .. chemin .. separateur .. "_=" .. tostring(os.time()) .. tostring(compteurRequete),
+        BASE .. chemin,
+    }
+    for _, url in ipairs(urls) do
+        local ok, corps = pcall(function() return game:HttpGet(url) end)
+        if ok and type(corps) == "string" then
+            local ok2, donnees = pcall(function() return HttpService:JSONDecode(corps) end)
+            if ok2 and type(donnees) == "table" and tonumber(donnees.value) then
+                return tonumber(donnees.value)
+            end
+        end
+    end
+    return nil
 end
 local compteDejaVerifie = false
 local totalEnAttente = false
 local dernierBucket = nil
-local function synchroniser()
-    local bucket = math.floor(os.time() / 60)
-    local courant
-    if bucket ~= dernierBucket then
-        dernierBucket = bucket
-        courant = lireValeur("/hit/" .. CLE .. "-l" .. (bucket % NB_CASES))
-        lireValeur("/set/" .. CLE .. "-l" .. ((bucket + 1) % NB_CASES) .. "?value=0")
-    else
-        courant = lireValeur("/get/" .. CLE .. "-l" .. (bucket % NB_CASES))
+local FICHIER_CACHE = "tenebres_mm2_compteur_cache.json"
+local cacheCompteur = { vivants = 1, total = nil }
+pcall(function()
+    if type(isfile) == "function" and type(readfile) == "function" and isfile(FICHIER_CACHE) then
+        local d = HttpService:JSONDecode(readfile(FICHIER_CACHE))
+        if type(d) == "table" then
+            cacheCompteur.total = tonumber(d.total)
+            cacheCompteur.vivants = math.max(1, tonumber(d.vivants) or 1)
+        end
     end
-    local precedent = lireValeur("/get/" .. CLE .. "-l" .. ((bucket - 1) % NB_CASES)) or 0
-    local vivants = math.max(courant or 0, precedent, 1)
-    local ajoute = nil
+end)
+local function sauverCacheCompteur()
+    pcall(function()
+        if type(writefile) == "function" then
+            writefile(FICHIER_CACHE, HttpService:JSONEncode(cacheCompteur))
+        end
+    end)
+end
+ligneEnLigne.Text = "1"
+if cacheCompteur.total then ligneTotal.Text = tostring(cacheCompteur.total) end
+local function afficherVivants(v)
+    if fermee or not v then return end
+    cacheCompteur.vivants = v
+    ligneEnLigne.Text = tostring(v)
+end
+local function afficherTotal(t)
+    if fermee or not t then return end
+    cacheCompteur.total = t
+    ligneTotal.Text = tostring(t)
+end
+local function enParallele(fonctions)
+    local resultats, restant = {}, #fonctions
+    for i, f in ipairs(fonctions) do
+        task.spawn(function()
+            local ok, r = pcall(f)
+            resultats[i] = ok and r or nil
+            restant = restant - 1
+        end)
+    end
+    local t0 = os.clock()
+    while restant > 0 and os.clock() - t0 < 10 and not fermee do task.wait(0.05) end
+    return resultats
+end
+local function synchroniserVivants()
+    local bucket = math.floor(os.time() / DUREE_FENETRE)
+    local nouveau = bucket ~= dernierBucket
+    local res = enParallele({
+        function()
+            if nouveau then
+                return lireValeur("/hit/" .. CLE_LIVE .. "-l" .. (bucket % NB_CASES))
+            end
+            return lireValeur("/get/" .. CLE_LIVE .. "-l" .. (bucket % NB_CASES))
+        end,
+        function() return lireValeur("/get/" .. CLE_LIVE .. "-l" .. ((bucket - 1) % NB_CASES)) end,
+    })
+    local courant, precedent = res[1], res[2] or 0
+    if nouveau and courant then
+        dernierBucket = bucket
+        task.spawn(lireValeur, "/set/" .. CLE_LIVE .. "-l" .. ((bucket + 1) % NB_CASES) .. "?value=0")
+    end
+    if courant or precedent > 0 then
+        afficherVivants(math.max(courant or 0, precedent, 1))
+        return true
+    end
+    return false
+end
+local function synchroniserTotal()
+    task.spawn(function() afficherTotal(lireValeur("/get/" .. CLE .. "-comptes")) end)
     if not compteDejaVerifie then
         local passages = lireValeur("/hit/" .. CLE .. "-u" .. tostring(joueur.UserId))
         if passages then
@@ -2731,21 +2800,21 @@ local function synchroniser()
         end
     end
     if totalEnAttente then
-        ajoute = lireValeur("/hit/" .. CLE .. "-comptes")
-        if ajoute then totalEnAttente = false end
+        local ajoute = lireValeur("/hit/" .. CLE .. "-comptes")
+        if ajoute then
+            totalEnAttente = false
+            afficherTotal(ajoute)
+        end
     end
-    local total = lireValeur("/get/" .. CLE .. "-comptes") or ajoute
-    return vivants, total
 end
 lancerTache(function()
-    task.wait(2)
     while not fermee do
-        local ok, vivants, total = pcall(synchroniser)
-        if ok and vivants and not fermee then
-            ligneEnLigne.Text = tostring(vivants)
-            ligneTotal.Text = total and tostring(total) or "—"
-        end
-        for _ = 1, 30 do
+        local reussi = false
+        task.spawn(function() pcall(synchroniserTotal) end)
+        local ok, r = pcall(synchroniserVivants)
+        reussi = ok and r == true
+        sauverCacheCompteur()
+        for _ = 1, (reussi and 30 or 5) do
             if fermee then break end
             task.wait(1)
         end
@@ -3967,27 +4036,29 @@ flyControl.marquerArriveeManuelle = function()
     end
 end
 ;(function()
-    local TAILLE_IMPACT      = Vector3.new(6, 6, 6)
-    local DENSITE_IMPACT     = 100
-    local VITESSE_IMPACT     = 800
+    local TAILLE_IMPACT      = Vector3.new(11, 11, 11)
+    local DENSITE_IMPACT     = 1500
+    local VITESSE_IMPACT     = 2500
     local VITESSE_IMPACT_MAX = 3000
-    local VITESSE_ROTATION   = 200000
-    local VITESSE_COLLE      = 120
-    local PUISSANCE_PIC      = 8000
-    local PUISSANCE_PIC_MAX  = 30000
-    local VITESSE_COLLE_MAX  = 400
-    local DUREE_MAX          = 10.0
+    local VITESSE_ROTATION   = 900000
+    local SKIN_STABLE        = false
+    local PUISSANCE_STABLE   = 1.6
+    local VITESSE_COLLE      = 700
+    local PUISSANCE_PIC      = 60000
+    local PUISSANCE_PIC_MAX  = 400000
+    local VITESSE_COLLE_MAX  = 2000
+    local DUREE_MAX          = 14.0
     local DUREE_APRES_ENVOI  = 2.00
     local VITESSE_ENVOI      = 150
     local VITESSE_VERTICALE  = 60
     local VITESSE_RAGDOLL    = 50
-    local DISTANCE_CONTACT   = 8
+    local DISTANCE_CONTACT   = 14
     local CHUTE_CARTE        = 80
-    local MARGE_ANTICIPATION = 0.06
-    local HORIZON_MIN        = 0.03
-    local HORIZON_MAX        = 0.18
-    local LEAD_MAX           = 5
-    local PORTEE_VERROU      = 6
+    local MARGE_ANTICIPATION = 0.10
+    local HORIZON_MIN        = 0.05
+    local HORIZON_MAX        = 0.35
+    local LEAD_MAX           = 10
+    local PORTEE_VERROU      = 10
     local HAUTEUR_CONTACT    = 1.8
     local DECALAGE_ARRIERE   = 1.0
     local INTERVALLE_PING    = 1.0
@@ -4244,6 +4315,7 @@ end
         local centre = Vector3.zero
         local historique = {}
         local dernierOffset, dernierRot, dernierVCible = nil, nil, Vector3.zero
+        local dernierePoussee = Vector3.zero
         local function terminer(message, couleur)
             if fini then return end
             fini = true
@@ -4401,7 +4473,7 @@ end
             end
             local lead = Vector3.zero
             if vitesseH > 1 then
-                local horizon = math.clamp(ping * 0.5 + MARGE_ANTICIPATION, HORIZON_MIN, HORIZON_MAX)
+                local horizon = math.clamp(ping + MARGE_ANTICIPATION, HORIZON_MIN, HORIZON_MAX)
                 lead = vH * horizon
                 if lead.Magnitude > LEAD_MAX then
                     lead = lead.Unit * LEAD_MAX
@@ -4413,11 +4485,12 @@ end
                 lead = lead.Unit * PORTEE_VERROU
             end
             local direction = fonctionsFling.directionImpact(posCible, racineDepart.Position, centre)
-            local positionBase = posCible + Vector3.new(0, 0.5, 0)
+            local positionBase = posCible + lead + Vector3.new(0, 0.5, 0)
             angleX = (angleX + 137) % 360
             angleY = (angleY + 191) % 360
             angleZ = (angleZ + 239) % 360
             local rotation = CFrame.Angles(math.rad(angleX), math.rad(angleY), math.rad(angleZ))
+            if SKIN_STABLE then rotation = rp.CFrame - rp.CFrame.Position end
             local cframeImpact = CFrame.new(positionBase) * rotation
             dernierOffset, dernierRot, dernierVCible = positionBase - posCible, rotation, vCible
             pcall(function()
@@ -4461,12 +4534,14 @@ end
                     VITESSE_COLLE + math.max(0, tNow - contactAt) * 150
                 )
             end
+            dernierePoussee = direction * (SKIN_STABLE and PUISSANCE_STABLE or 1) * (contactAt
+                and math.min(PUISSANCE_PIC_MAX, PUISSANCE_PIC + (tNow - contactAt) * 120000)
+                or intensite)
             pcall(function()
                 racineDepart.CFrame = cframeImpact
-                racineDepart.AssemblyLinearVelocity = vCible + direction * (contactAt
-                    and math.min(PUISSANCE_PIC_MAX, PUISSANCE_PIC + (tNow - contactAt) * 20000)
-                    or intensite)
-                racineDepart.AssemblyAngularVelocity = Vector3.new(VITESSE_ROTATION, VITESSE_ROTATION, VITESSE_ROTATION)
+                racineDepart.AssemblyLinearVelocity = vCible + dernierePoussee
+                racineDepart.AssemblyAngularVelocity = SKIN_STABLE and Vector3.zero
+                    or Vector3.new(VITESSE_ROTATION, VITESSE_ROTATION, VITESSE_ROTATION)
             end)
         end
         local function protege()
@@ -4488,7 +4563,7 @@ end
                     local rpCibleFrais = persoCible:FindFirstChild("HumanoidRootPart")
                     if rpCibleFrais then
                         racineDepart.CFrame = CFrame.new(rpCibleFrais.Position + dernierOffset) * dernierRot
-                        racineDepart.AssemblyLinearVelocity = rpCibleFrais.AssemblyLinearVelocity
+                        racineDepart.AssemblyLinearVelocity = rpCibleFrais.AssemblyLinearVelocity + dernierePoussee
                     end
                 end)
             end)
@@ -4579,6 +4654,17 @@ connecter(Players.PlayerRemoving, retirerEntree)
 lancerTache(function()
     while not fermee do
         local tZ = os.clock()
+        if tZ >= (flyControl.prochainSyncListe or 0) then
+            flyControl.prochainSyncListe = tZ + 1
+            local presents = {}
+            for _, autre in ipairs(Players:GetPlayers()) do
+                presents[autre] = true
+                if autre ~= joueur and not entrees[autre] then pcall(creerEntree, autre) end
+            end
+            for autre in pairs(entrees) do
+                if not presents[autre] or autre.Parent ~= Players then pcall(retirerEntree, autre) end
+            end
+        end
         if tZ >= (flyControl.prochainZombieListe or 0) then
             flyControl.prochainZombieListe = tZ + 0.4
             local modeZ = (flyControl.Z.mode and flyControl.Z.mode()) == true
