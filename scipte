@@ -674,21 +674,51 @@ local function figerAnimationsFly()
     local maintenant = os.clock()
     if maintenant < prochainFigeAnimFly then return end
     prochainFigeAnimFly = maintenant + 0.05
+
     local perso = joueur.Character
-    local hum = perso and perso:FindFirstChildOfClass("Humanoid")
+    if not perso then return end
+
+    -- Désactive le contrôleur Roblox qui relance sans cesse les animations
+    -- Walk/Run pendant que le BodyVelocity déplace le personnage.
+    local animate = perso:FindFirstChild("Animate")
+    if animate and animate:IsA("LocalScript") then
+        if not flyAnimateDesactive or flyAnimateDesactive.script ~= animate then
+            flyAnimateDesactive = {
+                script = animate,
+                etaitDesactive = animate.Disabled
+            }
+        end
+        if not animate.Disabled then
+            pcall(function() animate.Disabled = true end)
+        end
+    end
+
+    local hum = perso:FindFirstChildOfClass("Humanoid")
     local animator = hum and hum:FindFirstChildOfClass("Animator")
     if not animator then return end
+
     for _, piste in ipairs(animator:GetPlayingAnimationTracks()) do
         local nomBrut = piste.Animation and piste.Animation.Name or ""
         local nom = string.lower(nomBrut)
-        if string.sub(nomBrut, 1, 9) ~= "Tenebres_" and (string.find(nom, "run", 1, true) or string.find(nom, "walk", 1, true)
-            or string.find(nom, "jump", 1, true) or string.find(nom, "fall", 1, true)) then
-            pcall(function() piste:Stop(0.1) end)
+        if string.sub(nomBrut, 1, 9) ~= "Tenebres_" and (
+            string.find(nom, "run", 1, true)
+            or string.find(nom, "walk", 1, true)
+            or string.find(nom, "jump", 1, true)
+            or string.find(nom, "fall", 1, true)
+        ) then
+            pcall(function() piste:Stop(0) end)
         end
     end
 end
 local function restaurerAnimationsFly()
     prochainFigeAnimFly = 0
+    local sauvegarde = flyAnimateDesactive
+    flyAnimateDesactive = nil
+    if sauvegarde and sauvegarde.script and sauvegarde.script.Parent then
+        pcall(function()
+            sauvegarde.script.Disabled = sauvegarde.etaitDesactive == true
+        end)
+    end
 end
 local noclipOriginal = {}
 local noclipVisualOriginal = {}
