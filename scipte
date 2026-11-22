@@ -818,7 +818,8 @@ connecter(RunService.Stepped, function()
     local y = racine.Position.Y
     if humanoide and humanoide.FloorMaterial ~= Enum.Material.Air then
         noclipRefY = y
-    elseif flyControl.flyOn or flyControl.farmActif or flyControl.suiviActif or flingActif then
+    elseif flyControl.flyOn or flyControl.farmActif or flyControl.suiviActif or flingActif
+        or os.clock() < (flyControl.tpJusque or 0) then
         noclipRefY = y
     elseif noclipRefY and y < noclipRefY - CHUTE_MAX_NOCLIP then
         pcall(function()
@@ -3953,6 +3954,7 @@ section(pageTP, "Liste des joueurs").LayoutOrder = 99999
 local entrees = {}
 local flingVers
 flyControl.marquerArriveeManuelle = function()
+    flyControl.tpJusque = os.clock() + 1.5
     local perso0 = joueur.Character
     local hum0 = perso0 and perso0:FindFirstChildOfClass("Humanoid")
     local dansLobby = flyControl.Z and flyControl.Z.dansLobby
@@ -4010,15 +4012,18 @@ end
                 end
             end
         end
-        local somme, n = Vector3.zero, 0
+        local xs, ys, zs = {}, {}, {}
         for _, p in ipairs(Players:GetPlayers()) do
             local r = p.Character and p.Character:FindFirstChild("HumanoidRootPart")
             if r and r:IsA("BasePart") then
-                somme = somme + r.Position
-                n = n + 1
+                xs[#xs + 1], ys[#ys + 1], zs[#zs + 1] = r.Position.X, r.Position.Y, r.Position.Z
             end
         end
-        if n > 0 then return somme / n end
+        if #xs > 0 then
+            table.sort(xs); table.sort(ys); table.sort(zs)
+            local m = math.ceil(#xs / 2)
+            return Vector3.new(xs[m], ys[m], zs[m])
+        end
         return Vector3.zero
     end
     local function lirePing()
@@ -4213,6 +4218,7 @@ end
             notifier("Ton personnage n'est pas prêt", COL.ROUGE)
             return
         end
+        local yDepartCible = rpCible.Position.Y
         flingEnCours = true
         flyControl.resultatFling = nil
         jeton = jeton + 1
@@ -4366,13 +4372,13 @@ end
                         and (vitesse.Magnitude > VITESSE_RAGDOLL
                             or vCible.Magnitude > VITESSE_RAGDOLL
                             or deplacement > 8))
-                    or posCible.Y < centre.Y - CHUTE_CARTE
+                    or posCible.Y < yDepartCible - CHUTE_CARTE
                 if projete then
                     envoiDetecte = true
                     tEnvoi = tNow
                 end
             end
-            if posCible.Y < centre.Y - CHUTE_CARTE then
+            if posCible.Y < yDepartCible - CHUTE_CARTE then
                 return terminer("Cible projetée", COL.VERT)
             end
             if contactAt and not envoiDetecte and tNow - contactAt > 2.0 then
@@ -4513,6 +4519,8 @@ local function teleporterVers(cible)
         local rotation = racine.CFrame - racine.Position
         racine.CFrame = CFrame.new(position) * rotation
     end)
+    if flyControl.reinitialiserNoclipY then pcall(flyControl.reinitialiserNoclipY) end
+    if flyControl.reinitialiserApresTeleport then pcall(flyControl.reinitialiserApresTeleport) end
     if notifierInterface then
         notifierInterface("Téléporté au-dessus de la tête de " .. cible.DisplayName, COL.VERT, "tp_ok_" .. tostring(os.clock()))
     end
