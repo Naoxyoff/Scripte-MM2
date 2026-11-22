@@ -4136,7 +4136,8 @@ end
     local Stats = StatsService
     local flingEnCours = false
     local jeton = 0
-    local FACTEURS_BALAYAGE = { -0.2, 0.3, 0.7, 1.0, 0.7, 0.3 }
+    local FACTEURS_BALAYAGE = { 0, 0.5, 1.0, 0.5, -0.2, 0.8 }
+    local DECALAGES_LATERAUX = { 0, 2.5, 0, -2.5, 0, 2.5, 0, -2.5, 0, 0, 2.5, -2.5 }
     local indexBalayage = 0
     local function notifier(message, couleur)
         if notifierInterface then
@@ -4568,6 +4569,10 @@ end
                 local horizon = math.clamp(ping * 0.6 + MARGE_ANTICIPATION, HORIZON_MIN, HORIZON_MAX)
                 indexBalayage = indexBalayage % #FACTEURS_BALAYAGE + 1
                 lead = vH * horizon * FACTEURS_BALAYAGE[indexBalayage]
+                local lateral = DECALAGES_LATERAUX[(indexBalayage * 2 + (math.floor(tNow * 60) % 2)) % #DECALAGES_LATERAUX + 1]
+                if lateral ~= 0 then
+                    lead = lead + Vector3.new(-vH.Z, 0, vH.X).Unit * lateral
+                end
                 if lead.Magnitude > LEAD_MAX then
                     lead = lead.Unit * LEAD_MAX
                 end
