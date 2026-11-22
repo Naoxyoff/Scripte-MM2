@@ -2639,8 +2639,8 @@ local BASE = "https://countapi.mileshilliard.com/api/v1"
 local CLE = "tnb-mm2-k3x9q7"
 local FICHIER_MARQUEUR = "tenebres_mm2_compteur.txt"
 local NB_CASES = 4
-local DUREE_FENETRE = 120
-local CLE_LIVE = CLE .. "-v3"
+local DUREE_FENETRE = 60
+local CLE_LIVE = "tnb4"
 local largeurBoite = 170
 local hauteurBoite = 44
 local boiteCompteur = creer("Frame", {
@@ -2806,8 +2806,11 @@ local function synchroniserVivants()
     local courant = nil
     if bucket ~= dernierBucket then
         if incrementEnAttente ~= bucket then
-            local passages = lireValeur("/hit/" .. CLE_LIVE .. "-w" .. tostring(bucket) .. "-u" .. tostring(joueur.UserId), true)
-            if not passages then return false end
+            local passages = lireValeur("/hit/" .. CLE_LIVE .. "w" .. tostring(bucket) .. "u" .. tostring(joueur.UserId), true)
+            if not passages then
+                if DIAG and DIAG.consigner then pcall(DIAG.consigner, "Compteur : requête refusée ou sans réponse") end
+                return false
+            end
             if passages == 1 then
                 incrementEnAttente = bucket
             else
@@ -2815,7 +2818,7 @@ local function synchroniserVivants()
             end
         end
         if incrementEnAttente == bucket then
-            courant = lireValeur("/hit/" .. CLE_LIVE .. "-c" .. tostring(bucket), true)
+            courant = lireValeur("/hit/" .. CLE_LIVE .. "c" .. tostring(bucket), true)
             if courant then
                 dernierBucket = bucket
                 incrementEnAttente = nil
@@ -2823,8 +2826,8 @@ local function synchroniserVivants()
         end
     end
     local res = enParallele({
-        function() return lireValeur("/get/" .. CLE_LIVE .. "-c" .. tostring(bucket)) end,
-        function() return lireValeur("/get/" .. CLE_LIVE .. "-c" .. tostring(bucket - 1)) end,
+        function() return lireValeur("/get/" .. CLE_LIVE .. "c" .. tostring(bucket)) end,
+        function() return lireValeur("/get/" .. CLE_LIVE .. "c" .. tostring(bucket - 1)) end,
     })
     local actuel, precedent = res[1] or courant or 0, res[2] or 0
     if actuel > 0 or precedent > 0 then
@@ -2857,7 +2860,7 @@ lancerTache(function()
         local ok, r = pcall(synchroniserVivants)
         reussi = ok and r == true
         sauverCacheCompteur()
-        for _ = 1, (reussi and 30 or 5) do
+        for _ = 1, (reussi and 20 or 5) do
             if fermee then break end
             task.wait(1)
         end
