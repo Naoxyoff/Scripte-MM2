@@ -691,7 +691,66 @@ local function figerAnimationsFly()
         end
     end
 end
+local flyPisteCourse, flyPisteRepos, flyAnimCourse, flyAnimRepos, flyAnimHumanoide = nil, nil, nil, nil, nil
+local flyAnimEtat = nil
+local FLY_ANIM_IDS = {
+    course = { r15 = "507767714", r6 = "180426354" },
+    repos = { r15 = "507766666", r6 = "180435571" },
+}
+local function arreterPistesFly()
+    for _, o in ipairs({ flyPisteCourse, flyPisteRepos }) do
+        if o then
+            pcall(function() o:Stop(0.15) end)
+            local piste = o
+            task.delay(0.25, function() pcall(function() piste:Destroy() end) end)
+        end
+    end
+    for _, o in ipairs({ flyAnimCourse, flyAnimRepos }) do
+        if o then pcall(function() o:Destroy() end) end
+    end
+    flyPisteCourse, flyPisteRepos, flyAnimCourse, flyAnimRepos, flyAnimHumanoide = nil, nil, nil, nil, nil
+    flyAnimEtat = nil
+end
+local function mettreAJourAnimFly(enMouvement)
+    local hum = humanoide
+    if not hum or not hum.Parent then return end
+    local animator = hum:FindFirstChildOfClass("Animator")
+    if not animator then
+        animator = Instance.new("Animator")
+        animator.Parent = hum
+    end
+    if flyAnimHumanoide ~= hum or not flyPisteCourse or not flyPisteRepos then
+        arreterPistesFly()
+        local estR6 = hum.RigType == Enum.HumanoidRigType.R6
+        local function charger(ids, nom)
+            local anim = Instance.new("Animation")
+            anim.Name = "Tenebres_Fly" .. nom
+            anim.AnimationId = "rbxassetid://" .. (estR6 and ids.r6 or ids.r15)
+            local ok, piste = pcall(function() return animator:LoadAnimation(anim) end)
+            if not ok or not piste then pcall(function() anim:Destroy() end) return nil, nil end
+            piste.Priority = Enum.AnimationPriority.Action4
+            piste.Looped = true
+            return piste, anim
+        end
+        flyPisteCourse, flyAnimCourse = charger(FLY_ANIM_IDS.course, "Course")
+        flyPisteRepos, flyAnimRepos = charger(FLY_ANIM_IDS.repos, "Repos")
+        flyAnimHumanoide = hum
+        flyAnimEtat = nil
+    end
+    local voulu = enMouvement and "course" or "repos"
+    if flyAnimEtat ~= voulu then
+        flyAnimEtat = voulu
+        local aJouer = enMouvement and flyPisteCourse or flyPisteRepos
+        local aStopper = enMouvement and flyPisteRepos or flyPisteCourse
+        if aStopper then pcall(function() aStopper:Stop(0.2) end) end
+        if aJouer then pcall(function() aJouer:Play(0.2) end) end
+    end
+    if enMouvement and flyPisteCourse then
+        pcall(function() flyPisteCourse:AdjustSpeed(math.clamp(flySpeed / 30, 0.9, 1.6)) end)
+    end
+end
 local function restaurerAnimationsFly()
+    arreterPistesFly()
     prochainFigeAnimFly = 0
     local animate = flyAnimateDesactive
     flyAnimateDesactive = nil
@@ -788,8 +847,11 @@ local function mettreAJourFly()
         flyVelocity.Velocity = Vector3.zero
         racine.AssemblyLinearVelocity = Vector3.zero
     end
-    local look, up = camera.CFrame.LookVector, camera.CFrame.UpVector
-    flyGyro.CFrame = CFrame.lookAt(racine.Position, racine.Position + look, up)
+    local look = camera.CFrame.LookVector
+    local regard = Vector3.new(look.X, 0, look.Z)
+    if regard.Magnitude < 0.05 then regard = Vector3.new(0, 0, -1) end
+    flyGyro.CFrame = CFrame.lookAt(racine.Position, racine.Position + regard.Unit)
+    pcall(mettreAJourAnimFly, false)
     if humanoide then
         pcall(function()
             humanoide.PlatformStand = true
