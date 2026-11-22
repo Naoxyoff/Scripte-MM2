@@ -349,8 +349,7 @@ function DIAG.consigner(texte)
 end
 function DIAG.mesure(nom, f, ...)
 	local t0 = os.clock()
-	local args = table.pack(...)
-	local ok, resultat = pcall(f, table.unpack(args, 1, args.n))
+	local ok, resultat = pcall(f, ...)
 	local ms = (os.clock() - t0) * 1000
 	DIAG.msEvts = DIAG.msEvts + ms
 	DIAG.nbEvts = DIAG.nbEvts + 1
@@ -1366,10 +1365,17 @@ do
 						if direct and direct:IsA("RemoteFunction") then
 							fonction = direct
 						else
-							for _, o in ipairs(RS:GetDescendants()) do
+							local liste = RS:GetDescendants()
+							local tTranche = os.clock()
+							for i = 1, #liste do
+								local o = liste[i]
 								if o:IsA("RemoteFunction") and string.lower(o.Name) == "getplayerdata" then
 									fonction = o
 									break
+								end
+								if os.clock() - tTranche > 0.003 then
+									task.wait()
+									tTranche = os.clock()
 								end
 							end
 						end
@@ -4099,29 +4105,30 @@ flyControl.marquerArriveeManuelle = function()
     end
 end
 ;(function()
-    local TAILLE_IMPACT      = Vector3.new(11, 11, 11)
+    local TAILLE_IMPACT      = Vector3.new(14, 14, 14)
     local DENSITE_IMPACT     = 1500
     local VITESSE_IMPACT     = 2500
     local VITESSE_IMPACT_MAX = 3000
     local VITESSE_ROTATION   = 900000
     local SKIN_STABLE        = false
     local PUISSANCE_STABLE   = 1.6
-    local VITESSE_COLLE      = 700
-    local PUISSANCE_PIC      = 60000
-    local PUISSANCE_PIC_MAX  = 400000
-    local VITESSE_COLLE_MAX  = 2000
-    local DUREE_MAX          = 14.0
+    local VITESSE_COLLE      = 1500
+    local PUISSANCE_PIC      = 150000
+    local PUISSANCE_PIC_MAX  = 1000000
+    local VITESSE_COLLE_MAX  = 4000
+    local DUREE_MAX          = 30.0
+    local DISTANCE_EJECTION  = 400
     local DUREE_APRES_ENVOI  = 0.25
     local VITESSE_ENVOI      = 150
     local VITESSE_VERTICALE  = 60
     local VITESSE_RAGDOLL    = 50
     local DISTANCE_CONTACT   = 14
     local CHUTE_CARTE        = 80
-    local MARGE_ANTICIPATION = 0.02
-    local HORIZON_MIN        = 0.02
-    local HORIZON_MAX        = 0.08
-    local LEAD_MAX           = 2
-    local PORTEE_VERROU      = 2
+    local MARGE_ANTICIPATION = 0.05
+    local HORIZON_MIN        = 0.05
+    local HORIZON_MAX        = 0.25
+    local LEAD_MAX           = 6
+    local PORTEE_VERROU      = 6
     local HAUTEUR_CONTACT    = 0.6
     local DECALAGE_ARRIERE   = 1.0
     local INTERVALLE_PING    = 1.0
@@ -4129,6 +4136,8 @@ end
     local Stats = StatsService
     local flingEnCours = false
     local jeton = 0
+    local FACTEURS_BALAYAGE = { -0.2, 0.3, 0.7, 1.0, 0.7, 0.3 }
+    local indexBalayage = 0
     local function notifier(message, couleur)
         if notifierInterface then
             pcall(notifierInterface, message, couleur, "fling_" .. tostring(os.clock()))
@@ -4353,6 +4362,7 @@ end
             return
         end
         local yDepartCible = rpCible.Position.Y
+        local departCible = rpCible.Position
         flingEnCours = true
         flyControl.resultatFling = nil
         jeton = jeton + 1
@@ -4366,7 +4376,7 @@ end
         local personnage = racineDepart and racineDepart.Parent
         local etat = nil
         local ancienFPDH = workspace.FallenPartsDestroyHeight
-        local connA, connB = nil, nil
+        local connA, connB, connC, connD = nil, nil, nil, nil
         local fini = false
         local contactAt, positionContact = nil, nil
         local envoiDetecte, tEnvoi = false, nil
@@ -4389,6 +4399,8 @@ end
             end)
             if connA then connA:Disconnect(); connA = nil end
             if connB then connB:Disconnect(); connB = nil end
+            if connC then connC:Disconnect(); connC = nil end
+            if connD then connD:Disconnect(); connD = nil end
             if etat then
                 pcall(fonctionsFling.restaurerEtat, etat)
                 local etatRetour = etat
@@ -4449,13 +4461,13 @@ end
             if not dernier or tNow - dernier.t >= 0.01 then
                 historique[#historique + 1] = { t = tNow, p = pos }
             end
-            while #historique > 1 and tNow - historique[1].t > 0.20 do
+            while #historique > 1 and tNow - historique[1].t > 0.12 do
                 table.remove(historique, 1)
             end
             local v = Vector3.zero
             local premier = historique[1]
             local dt = tNow - premier.t
-            if dt > 0.04 then
+            if dt > 0.03 then
                 v = (pos - premier.p) / dt
             end
             local rapportee = rp.AssemblyLinearVelocity
@@ -4531,7 +4543,13 @@ end
                 end
             end
             if posCible.Y < yDepartCible - CHUTE_CARTE then
-                return terminer("Cible projetée", COL.VERT)
+                return terminer("Cible éjectée de la map", COL.VERT)
+            end
+            if departCible then
+                local ecartH = Vector3.new(posCible.X - departCible.X, 0, posCible.Z - departCible.Z).Magnitude
+                if ecartH > DISTANCE_EJECTION then
+                    return terminer("Cible éjectée de la map", COL.VERT)
+                end
             end
             if contactAt and not envoiDetecte and tNow - contactAt > 2.0 then
                 local deplacement = positionContact and (posCible - positionContact).Magnitude or 0
@@ -4539,30 +4557,36 @@ end
                     return terminer("Cible protégée (anti-fling)", COL.ORANGE)
                 end
             end
-            if envoiDetecte and tNow - tEnvoi >= DUREE_APRES_ENVOI then
-                return terminer("Cible projetée", COL.VERT)
-            end
             if t >= DUREE_MAX then
-                if envoiDetecte then
-                    return terminer("Cible projetée", COL.VERT)
-                end
                 if contactAt then
-                    return terminer("Fling terminé : cible non projetée", COL.ORANGE)
+                    return terminer("Fling terminé : cible pas éjectée", COL.ORANGE)
                 end
                 return terminer("Fling terminé : aucun contact", COL.MUET)
             end
             local lead = Vector3.zero
-            if vitesseH > 1 then
-                local horizon = math.clamp(ping * 0.25 + MARGE_ANTICIPATION, HORIZON_MIN, HORIZON_MAX)
-                lead = vH * horizon
+            if vitesseH > 2 then
+                local horizon = math.clamp(ping * 0.6 + MARGE_ANTICIPATION, HORIZON_MIN, HORIZON_MAX)
+                indexBalayage = indexBalayage % #FACTEURS_BALAYAGE + 1
+                lead = vH * horizon * FACTEURS_BALAYAGE[indexBalayage]
                 if lead.Magnitude > LEAD_MAX then
                     lead = lead.Unit * LEAD_MAX
                 end
             end
             local leadY = 0
+            if math.abs(vCible.Y) > 6 then
+                local horizonY = math.clamp(ping * 0.6 + MARGE_ANTICIPATION, HORIZON_MIN, HORIZON_MAX)
+                leadY = math.clamp(vCible.Y * horizonY * 0.7, -5, 5)
+            end
             lead = lead + Vector3.new(0, leadY, 0)
             if lead.Magnitude > PORTEE_VERROU then
                 lead = lead.Unit * PORTEE_VERROU
+            end
+            if contactAt and not envoiDetecte and tNow - contactAt > 0.3 then
+                lead = lead + Vector3.new(
+                    (math.random() - 0.5) * 6,
+                    (math.random() - 0.5) * 6,
+                    (math.random() - 0.5) * 6
+                )
             end
             local direction = fonctionsFling.directionImpact(posCible, racineDepart.Position, centre)
             local positionBase = posCible + lead + Vector3.new(0, 0.2, 0)
@@ -4637,16 +4661,20 @@ end
         end
         local okConnexion, errConnexion = pcall(function()
             connA = connecter(RunService.Heartbeat, protege)
-            connB = connecter(RunService.Stepped, function()
+            local function recoller()
                 if fini or not dernierOffset then return end
                 pcall(function()
                     local rpCibleFrais = persoCible:FindFirstChild("HumanoidRootPart")
                     if rpCibleFrais then
                         racineDepart.CFrame = CFrame.new(rpCibleFrais.Position + dernierOffset) * dernierRot
                         racineDepart.AssemblyLinearVelocity = rpCibleFrais.AssemblyLinearVelocity + dernierePoussee
+                        racineDepart.AssemblyAngularVelocity = Vector3.new(VITESSE_ROTATION, VITESSE_ROTATION, VITESSE_ROTATION)
                     end
                 end)
-            end)
+            end
+            connB = connecter(RunService.Stepped, recoller)
+            connC = connecter(RunService.RenderStepped, recoller)
+            pcall(function() connD = connecter(RunService.PreSimulation, recoller) end)
         end)
         if not okConnexion then
             return terminer("Fling impossible : " .. tostring(errConnexion), COL.ROUGE)
@@ -5282,8 +5310,11 @@ local soutienCache = setmetatable({}, { __mode = "k" })
 local derniereVue = setmetatable({}, { __mode = "k" })
 local instableJusqua = setmetatable({}, { __mode = "k" })
 local budgetSoutien = 0
+local personnagesPasse = {}
+local personnagesPasseAJour = false
 local function nouveauBudgetSoutien()
 	budgetSoutien = PIECES_PAR_PASSE
+	personnagesPasseAJour = false
 end
 local function solSousPoint(origine, exclusions)
 	PARAMS_SOUTIEN.FilterDescendantsInstances = exclusions
@@ -5304,10 +5335,15 @@ local function pieceSoutenue(p, t)
 	if c and t < c.fin then return c.ok end
 	if budgetSoutien <= 0 then return nil end
 	budgetSoutien = budgetSoutien - 1
-	local ex = { p }
-	for _, j in ipairs(Players:GetPlayers()) do
-		if j.Character then ex[#ex + 1] = j.Character end
+	if not personnagesPasseAJour then
+		personnagesPasseAJour = true
+		table.clear(personnagesPasse)
+		for _, j in ipairs(Players:GetPlayers()) do
+			if j.Character then personnagesPasse[#personnagesPasse + 1] = j.Character end
+		end
 	end
+	local ex = { p }
+	for i = 1, #personnagesPasse do ex[#ex + 1] = personnagesPasse[i] end
 	local base = p.Position + Vector3.new(0, 1.5, 0)
 	local ok = false
 	for i = 1, #OFFSETS_SOUTIEN do
@@ -5318,9 +5354,9 @@ local function pieceSoutenue(p, t)
 end
 -- Une pièce n'est une cible valable que si elle est immobile et, quand elle est loin
 -- (en hauteur) du niveau de départ du farm, posée sur une vraie surface.
-local function pieceAccessible(p, t, calculer)
+local function pieceAccessible(p, t, calculer, pp)
 	if not referenceY then return true end
-	local pp = p.Position
+	pp = pp or p.Position
 	local avant = derniereVue[p]
 	derniereVue[p] = pp
 	if (avant and (pp - avant).Magnitude > DEPLACEMENT_PIECE_MOBILE)
@@ -5343,11 +5379,14 @@ local function analyser(position)
 	local tAnalyse = os.clock()
 	for i = 1, #piecesListe do
 		local p = piecesListe[i]
-		if recoltable(p) and pieceAccessible(p, tAnalyse, false) ~= false then
-			n = n + 1
-			local delta = p.Position - position
-			local distanceCarree = delta:Dot(delta)
-			if distanceCarree < dMinCarre then dMinCarre = distanceCarree end
+		if recoltable(p) then
+			local pp = p.Position
+			if pieceAccessible(p, tAnalyse, false, pp) ~= false then
+				n = n + 1
+				local delta = pp - position
+				local distanceCarree = delta:Dot(delta)
+				if distanceCarree < dMinCarre then dMinCarre = distanceCarree end
+			end
 		end
 	end
 	restantes = n
@@ -5500,7 +5539,7 @@ local function choisirCible(position, murderPos)
 			local pp = p.Position
 			if math.abs(pp.Y - referenceY) <= farmCfg.margeVerticale
 				and not pieceDangereuse(pp, murderPos)
-				and pieceAccessible(p, t, true) == true then
+				and pieceAccessible(p, t, true, pp) == true then
 				local cout = coutDeplacement(pp - position)
 				local volee = pieceVolee(p, position, farmeurs)
 				local penalite = (enDelai and 12 or 0) + (volee and 12 or 0)
