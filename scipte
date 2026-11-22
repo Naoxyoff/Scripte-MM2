@@ -667,6 +667,36 @@ local function restaurerSonsPasFly()
     flySonsPersonnage = nil
     flySonsInitialises = false
 end
+local flyAnimateDesactive = nil
+local prochainFigeAnimFly = 0
+local function figerAnimationsFly()
+    local maintenant = os.clock()
+    if maintenant < prochainFigeAnimFly then return end
+    prochainFigeAnimFly = maintenant + 0.15
+    local perso = joueur.Character
+    if not perso then return end
+    local animate = perso:FindFirstChild("Animate")
+    if animate and animate:IsA("LocalScript") and not animate.Disabled then
+        animate.Disabled = true
+        flyAnimateDesactive = animate
+    end
+    local hum = perso:FindFirstChildOfClass("Humanoid")
+    local animator = hum and hum:FindFirstChildOfClass("Animator")
+    if animator then
+        for _, piste in ipairs(animator:GetPlayingAnimationTracks()) do
+            local nomAnim = piste.Animation and piste.Animation.Name or ""
+            if string.sub(nomAnim, 1, 9) ~= "Tenebres_" then
+                pcall(function() piste:Stop(0.1) end)
+            end
+        end
+    end
+end
+local function restaurerAnimationsFly()
+    prochainFigeAnimFly = 0
+    local animate = flyAnimateDesactive
+    flyAnimateDesactive = nil
+    if animate and animate.Parent then pcall(function() animate.Disabled = false end) end
+end
 local noclipOriginal = {}
 local noclipVisualOriginal = {}
 local noclipAddedConnection = nil
@@ -675,6 +705,7 @@ local noclipRefY = nil
 local CHUTE_MAX_NOCLIP = 80
 local function nettoyerFly()
     restaurerSonsPasFly()
+    restaurerAnimationsFly()
     if flyVelocity then pcall(function() flyVelocity:Destroy() end); flyVelocity = nil end
     if flyGyro then pcall(function() flyGyro:Destroy() end); flyGyro = nil end
     for key in pairs(flyKeys) do flyKeys[key] = false end
@@ -708,6 +739,7 @@ end
 local function preparerFly()
     if not flyOn or flingActif or not racine or not racine.Parent then return end
     couperSonsPasFly()
+    figerAnimationsFly()
     if not flyVelocity or flyVelocity.Parent ~= racine then
         if flyVelocity then pcall(function() flyVelocity:Destroy() end) end
         flyVelocity = Instance.new("BodyVelocity")
@@ -2608,7 +2640,7 @@ local CLE = "tnb-mm2-k3x9q7"
 local FICHIER_MARQUEUR = "tenebres_mm2_compteur.txt"
 local NB_CASES = 4
 local DUREE_FENETRE = 120
-local CLE_LIVE = CLE .. "-v2"
+local CLE_LIVE = CLE .. "-v3"
 local largeurBoite = 170
 local hauteurBoite = 44
 local boiteCompteur = creer("Frame", {
@@ -2703,13 +2735,14 @@ texte(boiteCompteur, {
     ZIndex = 6,
 })
 local compteurRequete = 0
-local function lireValeur(chemin)
+local function lireValeur(chemin, sansSecours)
     compteurRequete = compteurRequete + 1
     local separateur = string.find(chemin, "?", 1, true) and "&" or "?"
     local urls = {
         BASE .. chemin .. separateur .. "_=" .. tostring(os.time()) .. tostring(compteurRequete),
         BASE .. chemin,
     }
+    if sansSecours then urls = { BASE .. chemin } end
     for _, url in ipairs(urls) do
         local ok, corps = pcall(function() return game:HttpGet(url) end)
         if ok and type(corps) == "string" then
@@ -2767,25 +2800,35 @@ local function enParallele(fonctions)
     while restant > 0 and os.clock() - t0 < 10 and not fermee do task.wait(0.05) end
     return resultats
 end
+local incrementEnAttente = nil
 local function synchroniserVivants()
     local bucket = math.floor(os.time() / DUREE_FENETRE)
-    local nouveau = bucket ~= dernierBucket
-    local res = enParallele({
-        function()
-            if nouveau then
-                return lireValeur("/hit/" .. CLE_LIVE .. "-l" .. (bucket % NB_CASES))
+    local courant = nil
+    if bucket ~= dernierBucket then
+        if incrementEnAttente ~= bucket then
+            local passages = lireValeur("/hit/" .. CLE_LIVE .. "-w" .. tostring(bucket) .. "-u" .. tostring(joueur.UserId), true)
+            if not passages then return false end
+            if passages == 1 then
+                incrementEnAttente = bucket
+            else
+                dernierBucket = bucket
             end
-            return lireValeur("/get/" .. CLE_LIVE .. "-l" .. (bucket % NB_CASES))
-        end,
-        function() return lireValeur("/get/" .. CLE_LIVE .. "-l" .. ((bucket - 1) % NB_CASES)) end,
-    })
-    local courant, precedent = res[1], res[2] or 0
-    if nouveau and courant then
-        dernierBucket = bucket
-        task.spawn(lireValeur, "/set/" .. CLE_LIVE .. "-l" .. ((bucket + 1) % NB_CASES) .. "?value=0")
+        end
+        if incrementEnAttente == bucket then
+            courant = lireValeur("/hit/" .. CLE_LIVE .. "-c" .. tostring(bucket), true)
+            if courant then
+                dernierBucket = bucket
+                incrementEnAttente = nil
+            end
+        end
     end
-    if courant or precedent > 0 then
-        afficherVivants(math.max(courant or 0, precedent, 1))
+    local res = enParallele({
+        function() return lireValeur("/get/" .. CLE_LIVE .. "-c" .. tostring(bucket)) end,
+        function() return lireValeur("/get/" .. CLE_LIVE .. "-c" .. tostring(bucket - 1)) end,
+    })
+    local actuel, precedent = res[1] or courant or 0, res[2] or 0
+    if actuel > 0 or precedent > 0 then
+        afficherVivants(math.max(actuel, precedent, 1))
         return true
     end
     return false
@@ -4054,11 +4097,11 @@ end
     local VITESSE_RAGDOLL    = 50
     local DISTANCE_CONTACT   = 14
     local CHUTE_CARTE        = 80
-    local MARGE_ANTICIPATION = 0.10
+    local MARGE_ANTICIPATION = 0.16
     local HORIZON_MIN        = 0.05
-    local HORIZON_MAX        = 0.35
-    local LEAD_MAX           = 10
-    local PORTEE_VERROU      = 10
+    local HORIZON_MAX        = 0.50
+    local LEAD_MAX           = 18
+    local PORTEE_VERROU      = 18
     local HAUTEUR_CONTACT    = 1.8
     local DECALAGE_ARRIERE   = 1.0
     local INTERVALLE_PING    = 1.0
@@ -4483,6 +4526,9 @@ end
             lead = lead + Vector3.new(0, leadY, 0)
             if lead.Magnitude > PORTEE_VERROU then
                 lead = lead.Unit * PORTEE_VERROU
+            end
+            if vitesseH > 3 then
+                lead = lead * (1 + 0.7 * math.sin(tNow * 18))
             end
             local direction = fonctionsFling.directionImpact(posCible, racineDepart.Position, centre)
             local positionBase = posCible + lead + Vector3.new(0, 0.5, 0)
