@@ -5263,11 +5263,87 @@ local function recoltable(p)
 	if avaitTI[p] and touchTransmitterPresent[p] ~= true then return false end
 	return true
 end
+local HAUTEUR_LIBRE = 14
+local PORTEE_SOUTIEN = 14
+local FACTEUR_VERTICAL = 2.5
+local DUREE_SOUTIEN_OK, DUREE_SOUTIEN_KO = 20, 4
+local DUREE_INSTABLE = 4
+local VITESSE_PIECE_MOBILE = 3
+local DEPLACEMENT_PIECE_MOBILE = 3
+local PIECES_PAR_PASSE = 4
+local PARAMS_SOUTIEN = RaycastParams.new()
+PARAMS_SOUTIEN.FilterType = Enum.RaycastFilterType.Exclude
+PARAMS_SOUTIEN.IgnoreWater = true
+local OFFSETS_SOUTIEN = {
+	Vector3.zero, Vector3.new(2, 0, 0), Vector3.new(-2, 0, 0),
+	Vector3.new(0, 0, 2), Vector3.new(0, 0, -2),
+}
+local soutienCache = setmetatable({}, { __mode = "k" })
+local derniereVue = setmetatable({}, { __mode = "k" })
+local instableJusqua = setmetatable({}, { __mode = "k" })
+local budgetSoutien = 0
+local function nouveauBudgetSoutien()
+	budgetSoutien = PIECES_PAR_PASSE
+end
+local function solSousPoint(origine, exclusions)
+	PARAMS_SOUTIEN.FilterDescendantsInstances = exclusions
+	for _ = 1, 5 do
+		local hit = workspace:Raycast(origine, Vector3.new(0, -(PORTEE_SOUTIEN + 1.5), 0), PARAMS_SOUTIEN)
+		if not hit then return false end
+		if hit.Instance.CanCollide then return true end
+		exclusions[#exclusions + 1] = hit.Instance
+		PARAMS_SOUTIEN.FilterDescendantsInstances = exclusions
+	end
+	return false
+end
+-- true : un vrai support solide existe sous la pièce (sol, plateforme, étage, escalier)
+-- false : la pièce flotte dans le vide (leurre, effet visuel, objet hors map)
+-- nil : pas encore vérifiée (budget de rayons épuisé pour cette passe)
+local function pieceSoutenue(p, t)
+	local c = soutienCache[p]
+	if c and t < c.fin then return c.ok end
+	if budgetSoutien <= 0 then return nil end
+	budgetSoutien = budgetSoutien - 1
+	local ex = { p }
+	for _, j in ipairs(Players:GetPlayers()) do
+		if j.Character then ex[#ex + 1] = j.Character end
+	end
+	local base = p.Position + Vector3.new(0, 1.5, 0)
+	local ok = false
+	for i = 1, #OFFSETS_SOUTIEN do
+		if solSousPoint(base + OFFSETS_SOUTIEN[i], ex) then ok = true break end
+	end
+	soutienCache[p] = { ok = ok, fin = t + (ok and DUREE_SOUTIEN_OK or DUREE_SOUTIEN_KO) }
+	return ok
+end
+-- Une pièce n'est une cible valable que si elle est immobile et, quand elle est loin
+-- (en hauteur) du niveau de départ du farm, posée sur une vraie surface.
+local function pieceAccessible(p, t, calculer)
+	if not referenceY then return true end
+	local pp = p.Position
+	local avant = derniereVue[p]
+	derniereVue[p] = pp
+	if (avant and (pp - avant).Magnitude > DEPLACEMENT_PIECE_MOBILE)
+		or p.AssemblyLinearVelocity.Magnitude > VITESSE_PIECE_MOBILE then
+		instableJusqua[p] = t + DUREE_INSTABLE
+	end
+	local fin = instableJusqua[p]
+	if fin and fin > t then return false end
+	if math.abs(pp.Y - referenceY) <= HAUTEUR_LIBRE then return true end
+	if calculer then return pieceSoutenue(p, t) end
+	local c = soutienCache[p]
+	if c and t < c.fin then return c.ok end
+	return nil
+end
+local function coutDeplacement(delta)
+	return math.sqrt(delta.X * delta.X + delta.Z * delta.Z) + math.abs(delta.Y) * FACTEUR_VERTICAL
+end
 local function analyser(position)
 	local n, dMinCarre = 0, math.huge
+	local tAnalyse = os.clock()
 	for i = 1, #piecesListe do
 		local p = piecesListe[i]
-		if recoltable(p) then
+		if recoltable(p) and pieceAccessible(p, tAnalyse, false) ~= false then
 			n = n + 1
 			local delta = p.Position - position
 			local distanceCarree = delta:Dot(delta)
@@ -5412,8 +5488,9 @@ local function pieceVolee(piece, pos, farmeurs)
 end
 local function choisirCible(position, murderPos)
 	local t = os.clock()
-	local meilleure, meilleureDCarree = nil, math.huge
-	local meilleureDifferee, meilleureDiffereeScore = nil, math.huge
+	nouveauBudgetSoutien()
+	local meilleure, meilleurCout = nil, math.huge
+	local meilleureDifferee, meilleurCoutDiffere = nil, math.huge
 	local farmeurs = farmCfg.eviterFarmeurs and positionsFarmeurs() or {}
 	for i = 1, #piecesListe do
 		local p = piecesListe[i]
@@ -5422,19 +5499,18 @@ local function choisirCible(position, murderPos)
 		if recoltable(p) then
 			local pp = p.Position
 			if math.abs(pp.Y - referenceY) <= farmCfg.margeVerticale
-				and not pieceDangereuse(pp, murderPos) then
-				local delta = pp - position
-				local distanceCarree = delta:Dot(delta)
+				and not pieceDangereuse(pp, murderPos)
+				and pieceAccessible(p, t, true) == true then
+				local cout = coutDeplacement(pp - position)
 				local volee = pieceVolee(p, position, farmeurs)
 				local penalite = (enDelai and 12 or 0) + (volee and 12 or 0)
 				if penalite == 0 then
-					if distanceCarree < meilleureDCarree then
-						meilleure, meilleureDCarree = p, distanceCarree
+					if cout < meilleurCout then
+						meilleure, meilleurCout = p, cout
 					end
-				elseif meilleureDiffereeScore > penalite
-					and distanceCarree < (meilleureDiffereeScore - penalite) ^ 2 then
+				elseif cout + penalite < meilleurCoutDiffere then
 					meilleureDifferee = p
-					meilleureDiffereeScore = math.sqrt(distanceCarree) + penalite
+					meilleurCoutDiffere = cout + penalite
 				end
 			end
 		end
@@ -5766,6 +5842,9 @@ local function nouvelleManche()
 	etatResetSac.resetFait = false
 	echecs = 0
 	table.clear(abandonnees)
+	table.clear(soutienCache)
+	table.clear(derniereVue)
+	table.clear(instableJusqua)
 end
 local piecesCompteesFarm = setmetatable({}, { __mode = "k" })
 succes = function(piece)
@@ -6084,6 +6163,15 @@ local function pas(dt)
 		cible = nil
 		enContact = false
 		tempsContact = 0
+	end
+	if cible and t >= prochainRecheck then
+		nouveauBudgetSoutien()
+		if pieceAccessible(cible, t, true) == false then
+			cible = nil
+			enContact = false
+			tempsContact = 0
+			derniereDistance, tempsSansProgres = math.huge, 0
+		end
 	end
 	if not cible or t >= prochainRecheck then
 		prochainRecheck = t + INTERVALLE_RECHECK
