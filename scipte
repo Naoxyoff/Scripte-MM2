@@ -588,16 +588,16 @@ connecter(RunService.RenderStepped, function(dt)
     if maintenant < DIAG.prochainControleMouvement then return end
     DIAG.prochainControleMouvement = maintenant + 0.10
 	if gravOn and workspace.Gravity ~= gravVal then workspace.Gravity = gravVal end
-	if humanoide and not valeursMouvementCapturees then
+	if humanoide and not valeursMouvementCapturees and not flyControl.flyOn then
 		vitesseOrigine = humanoide.WalkSpeed
 		sautOrigine = humanoide.JumpPower
 		useJumpPowerOrigine = humanoide.UseJumpPower
 		valeursMouvementCapturees = true
 	end
-	if vitesseOn and humanoide and humanoide.WalkSpeed ~= vitesseVal then
+	if vitesseOn and humanoide and not flyControl.flyOn and humanoide.WalkSpeed ~= vitesseVal then
 		humanoide.WalkSpeed = vitesseVal
 	end
-	if sautOn and humanoide then
+	if sautOn and humanoide and not flyControl.flyOn then
 		if not humanoide.UseJumpPower then humanoide.UseJumpPower = true end
 		if humanoide.JumpPower ~= sautVal then humanoide.JumpPower = sautVal end
 	end
@@ -617,6 +617,8 @@ local noclipTransparence = (flyControl.noclipTransp or 65) / 100
 local flyVelocity, flyGyro = nil, nil
 local flyKeys = {W=false, A=false, S=false, D=false, Up=false, Down=false}
 local flyOldAutoRotate = nil
+local flyOldMouvement = nil
+local flyOldEtats = nil
 local flySonsSilences = {}
 local flySonAjouteConnection = nil
 local flySonsPersonnage = nil
@@ -672,89 +674,22 @@ local prochainFigeAnimFly = 0
 local function figerAnimationsFly()
     local maintenant = os.clock()
     if maintenant < prochainFigeAnimFly then return end
-    prochainFigeAnimFly = maintenant + 0.15
+    prochainFigeAnimFly = maintenant + 0.05
     local perso = joueur.Character
-    if not perso then return end
-    local animate = perso:FindFirstChild("Animate")
-    if animate and animate:IsA("LocalScript") and not animate.Disabled then
-        animate.Disabled = true
-        flyAnimateDesactive = animate
-    end
-    local hum = perso:FindFirstChildOfClass("Humanoid")
+    local hum = perso and perso:FindFirstChildOfClass("Humanoid")
     local animator = hum and hum:FindFirstChildOfClass("Animator")
-    if animator then
-        for _, piste in ipairs(animator:GetPlayingAnimationTracks()) do
-            local nomAnim = piste.Animation and piste.Animation.Name or ""
-            if string.sub(nomAnim, 1, 9) ~= "Tenebres_" then
-                pcall(function() piste:Stop(0.1) end)
-            end
+    if not animator then return end
+    for _, piste in ipairs(animator:GetPlayingAnimationTracks()) do
+        local nomBrut = piste.Animation and piste.Animation.Name or ""
+        local nom = string.lower(nomBrut)
+        if string.sub(nomBrut, 1, 9) ~= "Tenebres_" and (string.find(nom, "run", 1, true) or string.find(nom, "walk", 1, true)
+            or string.find(nom, "jump", 1, true) or string.find(nom, "fall", 1, true)) then
+            pcall(function() piste:Stop(0.1) end)
         end
-    end
-end
-local flyPisteCourse, flyPisteRepos, flyAnimCourse, flyAnimRepos, flyAnimHumanoide = nil, nil, nil, nil, nil
-local flyAnimEtat = nil
-local FLY_ANIM_IDS = {
-    course = { r15 = "507767714", r6 = "180426354" },
-    repos = { r15 = "507766666", r6 = "180435571" },
-}
-local function arreterPistesFly()
-    for _, o in ipairs({ flyPisteCourse, flyPisteRepos }) do
-        if o then
-            pcall(function() o:Stop(0.15) end)
-            local piste = o
-            task.delay(0.25, function() pcall(function() piste:Destroy() end) end)
-        end
-    end
-    for _, o in ipairs({ flyAnimCourse, flyAnimRepos }) do
-        if o then pcall(function() o:Destroy() end) end
-    end
-    flyPisteCourse, flyPisteRepos, flyAnimCourse, flyAnimRepos, flyAnimHumanoide = nil, nil, nil, nil, nil
-    flyAnimEtat = nil
-end
-local function mettreAJourAnimFly(enMouvement)
-    local hum = humanoide
-    if not hum or not hum.Parent then return end
-    local animator = hum:FindFirstChildOfClass("Animator")
-    if not animator then
-        animator = Instance.new("Animator")
-        animator.Parent = hum
-    end
-    if flyAnimHumanoide ~= hum or not flyPisteCourse or not flyPisteRepos then
-        arreterPistesFly()
-        local estR6 = hum.RigType == Enum.HumanoidRigType.R6
-        local function charger(ids, nom)
-            local anim = Instance.new("Animation")
-            anim.Name = "Tenebres_Fly" .. nom
-            anim.AnimationId = "rbxassetid://" .. (estR6 and ids.r6 or ids.r15)
-            local ok, piste = pcall(function() return animator:LoadAnimation(anim) end)
-            if not ok or not piste then pcall(function() anim:Destroy() end) return nil, nil end
-            piste.Priority = Enum.AnimationPriority.Action4
-            piste.Looped = true
-            return piste, anim
-        end
-        flyPisteCourse, flyAnimCourse = charger(FLY_ANIM_IDS.course, "Course")
-        flyPisteRepos, flyAnimRepos = charger(FLY_ANIM_IDS.repos, "Repos")
-        flyAnimHumanoide = hum
-        flyAnimEtat = nil
-    end
-    local voulu = enMouvement and "course" or "repos"
-    if flyAnimEtat ~= voulu then
-        flyAnimEtat = voulu
-        local aJouer = enMouvement and flyPisteCourse or flyPisteRepos
-        local aStopper = enMouvement and flyPisteRepos or flyPisteCourse
-        if aStopper then pcall(function() aStopper:Stop(0.2) end) end
-        if aJouer then pcall(function() aJouer:Play(0.2) end) end
-    end
-    if enMouvement and flyPisteCourse then
-        pcall(function() flyPisteCourse:AdjustSpeed(math.clamp(flySpeed / 30, 0.9, 1.6)) end)
     end
 end
 local function restaurerAnimationsFly()
-    arreterPistesFly()
     prochainFigeAnimFly = 0
-    local animate = flyAnimateDesactive
-    flyAnimateDesactive = nil
-    if animate and animate.Parent then pcall(function() animate.Disabled = false end) end
 end
 local noclipOriginal = {}
 local noclipVisualOriginal = {}
@@ -780,6 +715,16 @@ local function nettoyerFly()
             h.PlatformStand = false
             h.Sit = false
             if flyOldAutoRotate ~= nil then h.AutoRotate = flyOldAutoRotate end
+            if flyOldEtats then
+                for etat, valeur in pairs(flyOldEtats) do h:SetStateEnabled(etat, valeur) end
+                flyOldEtats = nil
+            end
+            if flyOldMouvement then
+                h.WalkSpeed = flyOldMouvement.walk
+                h.JumpPower = flyOldMouvement.jump
+                h.JumpHeight = flyOldMouvement.hauteur
+                flyOldMouvement = nil
+            end
         end)
         task.defer(function()
             if not h or not h.Parent or flyOn
@@ -822,6 +767,17 @@ local function preparerFly()
         flyOldAutoRotate = humanoide.AutoRotate
         humanoide.AutoRotate = false
     end
+    if humanoide and not flyOldEtats then
+        flyOldEtats = {}
+        for _, etat in ipairs({ Enum.HumanoidStateType.Jumping, Enum.HumanoidStateType.Freefall }) do
+            local ok, v = pcall(function() return humanoide:GetStateEnabled(etat) end)
+            flyOldEtats[etat] = (not ok) or v == true
+            pcall(function() humanoide:SetStateEnabled(etat, false) end)
+        end
+    end
+    if humanoide and not flyOldMouvement then
+        flyOldMouvement = { walk = humanoide.WalkSpeed, jump = humanoide.JumpPower, hauteur = humanoide.JumpHeight }
+    end
 end
 local function mettreAJourFly()
     if not flyOn or flingActif then return end
@@ -847,15 +803,14 @@ local function mettreAJourFly()
         flyVelocity.Velocity = Vector3.zero
         racine.AssemblyLinearVelocity = Vector3.zero
     end
-    local look = camera.CFrame.LookVector
-    local regard = Vector3.new(look.X, 0, look.Z)
-    if regard.Magnitude < 0.05 then regard = Vector3.new(0, 0, -1) end
-    flyGyro.CFrame = CFrame.lookAt(racine.Position, racine.Position + regard.Unit)
-    pcall(mettreAJourAnimFly, false)
+    local look, up = camera.CFrame.LookVector, camera.CFrame.UpVector
+    flyGyro.CFrame = CFrame.lookAt(racine.Position, racine.Position + look, up)
     if humanoide then
         pcall(function()
-            humanoide.PlatformStand = true
-            humanoide:ChangeState(Enum.HumanoidStateType.Physics)
+            if humanoide.PlatformStand then humanoide.PlatformStand = false end
+            if humanoide.WalkSpeed ~= 0 then humanoide.WalkSpeed = 0 end
+            if humanoide.JumpPower ~= 0 then humanoide.JumpPower = 0 end
+            if humanoide.JumpHeight ~= 0 then humanoide.JumpHeight = 0 end
         end)
     end
 end
@@ -4156,18 +4111,18 @@ end
     local PUISSANCE_PIC_MAX  = 400000
     local VITESSE_COLLE_MAX  = 2000
     local DUREE_MAX          = 14.0
-    local DUREE_APRES_ENVOI  = 2.00
+    local DUREE_APRES_ENVOI  = 0.25
     local VITESSE_ENVOI      = 150
     local VITESSE_VERTICALE  = 60
     local VITESSE_RAGDOLL    = 50
     local DISTANCE_CONTACT   = 14
     local CHUTE_CARTE        = 80
-    local MARGE_ANTICIPATION = 0.16
-    local HORIZON_MIN        = 0.05
-    local HORIZON_MAX        = 0.50
-    local LEAD_MAX           = 18
-    local PORTEE_VERROU      = 18
-    local HAUTEUR_CONTACT    = 1.8
+    local MARGE_ANTICIPATION = 0.02
+    local HORIZON_MIN        = 0.02
+    local HORIZON_MAX        = 0.08
+    local LEAD_MAX           = 2
+    local PORTEE_VERROU      = 2
+    local HAUTEUR_CONTACT    = 0.6
     local DECALAGE_ARRIERE   = 1.0
     local INTERVALLE_PING    = 1.0
     local INTERVALLE_ETAT    = 0.1
@@ -4434,7 +4389,24 @@ end
             end)
             if connA then connA:Disconnect(); connA = nil end
             if connB then connB:Disconnect(); connB = nil end
-            if etat then pcall(fonctionsFling.restaurerEtat, etat) end
+            if etat then
+                pcall(fonctionsFling.restaurerEtat, etat)
+                local etatRetour = etat
+                task.spawn(function()
+                    for _ = 1, 6 do
+                        task.wait(0.05)
+                        if fermee or flingEnCours or flingActif then return end
+                        local rr = etatRetour.racine
+                        if rr and rr.Parent then
+                            pcall(function()
+                                rr.CFrame = etatRetour.cframe
+                                rr.AssemblyLinearVelocity = Vector3.zero
+                                rr.AssemblyAngularVelocity = Vector3.zero
+                            end)
+                        end
+                    end
+                end)
+            end
             pcall(function() workspace.FallenPartsDestroyHeight = ancienFPDH end)
             if monJeton == jeton then
                 flingEnCours = false
@@ -4581,22 +4553,19 @@ end
             end
             local lead = Vector3.zero
             if vitesseH > 1 then
-                local horizon = math.clamp(ping + MARGE_ANTICIPATION, HORIZON_MIN, HORIZON_MAX)
+                local horizon = math.clamp(ping * 0.25 + MARGE_ANTICIPATION, HORIZON_MIN, HORIZON_MAX)
                 lead = vH * horizon
                 if lead.Magnitude > LEAD_MAX then
                     lead = lead.Unit * LEAD_MAX
                 end
             end
-            local leadY = math.clamp(vCible.Y * 0.08, -3, 3)
+            local leadY = 0
             lead = lead + Vector3.new(0, leadY, 0)
             if lead.Magnitude > PORTEE_VERROU then
                 lead = lead.Unit * PORTEE_VERROU
             end
-            if vitesseH > 3 then
-                lead = lead * (1 + 0.7 * math.sin(tNow * 18))
-            end
             local direction = fonctionsFling.directionImpact(posCible, racineDepart.Position, centre)
-            local positionBase = posCible + lead + Vector3.new(0, 0.5, 0)
+            local positionBase = posCible + lead + Vector3.new(0, 0.2, 0)
             angleX = (angleX + 137) % 360
             angleY = (angleY + 191) % 360
             angleZ = (angleZ + 239) % 360
