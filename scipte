@@ -2877,7 +2877,6 @@ local function synchroniserVivants()
     })
     local actuel, precedent = res[1] or courant or 0, res[2] or 0
     if actuel > 0 or precedent > 0 then
-        local ageFenetre = horlogeCommune() % DUREE_FENETRE
         local rapport = tostring(actuel) .. "/" .. tostring(precedent)
         if rapport ~= dernierRapportCompteur and nbRapportsCompteur < 6 then
             dernierRapportCompteur = rapport
@@ -2886,11 +2885,7 @@ local function synchroniserVivants()
                 pcall(DIAG.consigner, string.format("Compteur : fenêtre %d · actuelle %d · précédente %d", bucket, actuel, precedent))
             end
         end
-        if ageFenetre >= 12 then
-            afficherVivants(math.max(actuel, 1))
-        else
-            afficherVivants(math.max(actuel, precedent, 1))
-        end
+        afficherVivants(math.max(actuel, precedent, 1))
         return true
     end
     return false
