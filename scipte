@@ -78,6 +78,7 @@ local connexionsGlobales = environnementGlobal.__TENEBRES_CONNEXIONS
 local chargementTermine = false
 local chargementAnnule = false
 local scriptFerme = false
+local fermee = false
 local signalFinChargement = Instance.new("BindableEvent")
 local restaurationsEnAttente = {}
 if type(connexionsGlobales) ~= "table" then
@@ -85,6 +86,10 @@ if type(connexionsGlobales) ~= "table" then
     environnementGlobal.__TENEBRES_CONNEXIONS = connexionsGlobales
 end
 local function connecter(signal, rappel)
+    if scriptFerme then
+        -- Instance déjà fermée : aucune nouvelle connexion ne doit survivre.
+        return { Connected = false, Disconnect = function() end }
+    end
     local connexion = signal:Connect(function(...)
         if scriptFerme or not chargementTermine or environnementGlobal.__TENEBRES_FERMER == true then
             return
@@ -157,12 +162,29 @@ do
             r.AssemblyLinearVelocity = Vector3.zero
             r.AssemblyAngularVelocity = Vector3.zero
         end
+        -- Vestiges d'une ancienne instance (fermée trop tard ou plantée) : on les supprime.
         for _, p in ipairs(Players:GetPlayers()) do
             local c = p.Character
             if c then
-                for _, o in ipairs(c:GetChildren()) do
-                    if o.Name == "TenebresHitbox" then o:Destroy() end
+                for _, o in ipairs(c:GetDescendants()) do
+                    if o.Name == "TenebresHitbox"
+                        or o.Name == "TenebresFlyVelocity" or o.Name == "TenebresFlyGyro"
+                        or o.Name == "TenebresFarmMaintien"
+                        or (o:IsA("Highlight") and (o.Name == "RoleHalo" or o.Name == "ZombieModeHalo" or o.Name == "MoiArc"))
+                        or (o:IsA("BoxHandleAdornment") and o.Name == "RoleBoite")
+                        or (o:IsA("BillboardGui") and o.Name == "RoleEtiquette") then
+                        pcall(function() o:Destroy() end)
+                    end
                 end
+            end
+        end
+        for _, o in ipairs(workspace:GetChildren()) do
+            if o:IsA("Highlight") and o.Name == "PistoletDore" then pcall(function() o:Destroy() end) end
+        end
+        local armeAuSol = workspace:FindFirstChild("GunDrop", true)
+        if armeAuSol then
+            for _, o in ipairs(armeAuSol:GetDescendants()) do
+                if o:IsA("BillboardGui") and o.Name == "RoleEtiquette" then pcall(function() o:Destroy() end) end
             end
         end
     end)
@@ -183,6 +205,19 @@ do
         end
     end)
 end
+-- Fermeture anticipée : tant que le menu n'est pas prêt, une relance (ou une erreur pendant
+-- le chargement) peut ainsi arrêter cette instance. Remplacée par fermerScript plus bas.
+pcall(function()
+    environnementGlobal.__TENEBRES_FERMER = function()
+        fermee = true
+        scriptFerme = true
+        if not chargementTermine then
+            chargementAnnule = true
+            table.clear(restaurationsEnAttente)
+            signalFinChargement:Fire()
+        end
+    end
+end)
 local resetAutoSilencieuxActif = false
 local function estSonMort(objet)
     if not objet or not objet:IsA("Sound") then return false end
@@ -346,7 +381,6 @@ local function lireTouche(nom, defaut)
 end
 local TOUCHE_REDUIRE = lireTouche("toucheReduireP", Enum.KeyCode.P)
 local actif = false
-local fermee = false
 local racine, humanoide = nil, nil
 local definirActif
 local reinitialiserAntiFling
@@ -1238,6 +1272,7 @@ local boites = {}
 local rolesParJoueur = {}
 local rolesServeur = {}
 flyControl.tRoleRecu = {}
+flyControl.tRoleEvenement = {}
 local verrouRoles = { murder = nil, sherif = nil }
 local calculerRoles
 local joueursElimines = {}
@@ -1381,7 +1416,7 @@ do
 		if dansLobby and dansLobby(perso) then return true end
 		return false
 	end
-	local function traiterRoles(res)
+	local function traiterRoles(res, depuisSondage)
 						if mancheTerminee then
 							mancheTerminee = false
 							nouvelleMancheAnnoncee = true
@@ -1436,6 +1471,7 @@ do
                                 nom = nil
                             end
 							if nom and role ~= "innocent" then flyControl.tRoleRecu[nom] = os.clock() end
+							if nom and role ~= "innocent" and not depuisSondage then flyControl.tRoleEvenement[nom] = os.clock() end
 							if nom and not joueursElimines[nom] then
 								if role == "murder" or role == "sherif" then
 									local ancien = verrouRoles[role]
@@ -1616,13 +1652,21 @@ do
 				end
 				if res and not fermee and not mancheTerminee then
 					local dansLobby = flyControl.Z and flyControl.Z.dansLobby
-					if dansLobby then
-						for nom in pairs(res) do
-							local p = Players:FindFirstChild(tostring(nom))
-							if p and p.Character and dansLobby(p.Character) then res[nom] = nil end
+					for nom, role in pairs(res) do
+						local p = Players:FindFirstChild(tostring(nom))
+						if p then
+							local perso = p.Character
+							if perso and dansLobby and dansLobby(perso) then
+								res[nom] = nil
+							elseif role ~= "innocent" and not (perso and perso:FindFirstChildOfClass("Humanoid")
+								and perso:FindFirstChild("HumanoidRootPart")) then
+								-- Personnage pas encore chargé : impossible de vérifier que le rôle lu
+								-- n'est pas celui de la manche précédente, on attend le prochain sondage.
+								res[nom] = nil
+							end
 						end
 					end
-					if next(res) ~= nil then traiterRoles(res) end
+					if next(res) ~= nil then traiterRoles(res, true) end
 				end
 			end
 			task.wait(2)
@@ -1838,6 +1882,22 @@ calculerRoles = function()
 			rolesServeur[p.Name] = nil
 			persoDuRole[p.Name] = nil
 			if p == herosOrigine then herosOrigine = nil end
+		end
+	end
+	-- Rôle périmé : un murder/sheriff déclaré qui est au lobby sans jamais avoir été vu en
+	-- map pendant cette manche (ancien rôle lu à ton arrivée) ne doit pas rester affiché
+	-- jusqu'à la manche suivante. Délai de grâce après une annonce reçue par évènement.
+	for _, p in ipairs(listeJoueurs) do
+		local srvPerime = rolesServeur[p.Name]
+		if srvPerime == "murder" or srvPerime == "sherif" then
+			local persoPerime = p.Character
+			local humPerime = persoPerime and persoPerime:FindFirstChildOfClass("Humanoid")
+			if humPerime and estDansLobby(persoPerime) and vuEnMap[p.Name] ~= generationManche
+				and os.clock() - (flyControl.tRoleEvenement[p.Name] or 0) > 10 then
+				rolesServeur[p.Name] = nil
+				if verrouRoles[srvPerime] == p.Name then verrouRoles[srvPerime] = nil end
+				if sheriffOrigine == p then sheriffOrigine = nil end
+			end
 		end
 	end
 	local porteurs = {}
@@ -2409,12 +2469,29 @@ local function majArme()
         nomArme.TextStrokeTransparency = 0
     end
 end
+-- Détruit les Highlights / boîtes / pastilles de rôle que les tables de suivi ne connaissent
+-- plus (doublons orphelins laissés par une ancienne instance ou un personnage remplacé).
+flyControl.balayerChams = function(avecEtiquettes)
+	for _, p in ipairs(Players:GetPlayers()) do
+		local c = p.Character
+		if c then
+			for _, o in ipairs(c:GetDescendants()) do
+				if (o:IsA("Highlight") and (o.Name == "RoleHalo" or o.Name == "ZombieModeHalo"))
+					or (o:IsA("BoxHandleAdornment") and o.Name == "RoleBoite")
+					or (avecEtiquettes and o:IsA("BillboardGui") and o.Name == "RoleEtiquette") then
+					pcall(function() o:Destroy() end)
+				end
+			end
+		end
+	end
+end
 function nettoyerChams()
 	for p in pairs(flyControl.Z.halos) do flyControl.Z.retirer(p) end
 	for p in pairs(halos) do retirerHalo(p) end
 	for p in pairs(boites) do retirerBoite(p) end
 	for p in pairs(etiquettes) do retirerEtiquette(p) end
 	retirerArme()
+	flyControl.balayerChams(true)
 end
 table.insert(flyControl.hubArme, function(obj)
 	if fermee or not armeActive then return end
@@ -2534,6 +2611,7 @@ connecter(Players.PlayerRemoving, function(p)
     connexionsMort[p] = nil
     rolesParJoueur[p] = nil
     rolesServeur[p.Name] = nil
+    flyControl.tRoleEvenement[p.Name] = nil
     joueursElimines[p.Name] = nil
 end)
 local LARGEUR, HAUTEUR = 860, 570
@@ -4268,7 +4346,7 @@ do
 	local etat = {
 		killAll = false, auto = false,
 		scan = 0, frappe = 0, activation = 0, jusqua = 0,
-		prochainClic = 0, prochainEquip = 0,
+		prochainEquip = 0,
 		ancrage = nil, retour = false,
 	}
 	local function retirerBoite(p)
@@ -4480,24 +4558,8 @@ do
 	end
 
 	carteBouton(pages["Combat"], "Kill All",
-		"Coup instantané sur toute la map : clic gauche en jeu",
+		"Coup instantané sur toute la map",
 		"KILL ALL", COL.VIOLET, lancerKillAll)
-
-	interrupteur(pages["Combat"], "Clic gauche = Kill All",
-		"Désactivé par défaut : sinon chaque coup de couteau tue toute la map", false,
-		function(v) etat.clicKill = v end)
-
-	-- Le clic gauche en jeu déclenche le coup (uniquement si l'option ci-dessus est active).
-	connecter(UserInputService.InputBegan, function(entree, pris)
-		if fermee or pris then return end
-		if entree.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
-		if not etat.clicKill then return end
-		local maintenant = os.clock()
-		if maintenant < etat.prochainClic then return end
-		etat.prochainClic = maintenant + 0.15
-		if etat.tientAutreOutil() then return end
-		lancerKillAll()
-	end)
 
 	interrupteur(pages["Combat"], "Auto Kill All",
 		"Tue toute la map en continu, tu bouges librement", false,
@@ -4556,6 +4618,7 @@ flyControl.inters.chams = interrupteur(pages["Visuel"], "Chams", "Murder rouge, 
 	if not v then
 		for p in pairs(halos) do retirerHalo(p) end
 		for p in pairs(boites) do retirerBoite(p) end
+		flyControl.balayerChams(false)
 	end
 end)
 interrupteur(pages["Visuel"], "Chams arme tombée", "Affiche l'arme tombée en jaune clair", false, function(v)
@@ -8772,6 +8835,7 @@ end)
         chargementAnnule = true
         table.clear(restaurationsEnAttente)
         signalFinChargement:Fire()
+        pcall(function() if gui and gui.Parent then gui:Destroy() end end)
     end
 end)()
 do
