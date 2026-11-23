@@ -613,10 +613,19 @@ end)
 do
 local flyOn, flySpeed, noclipOn = flyControl.flyOn, flyControl.flySpeed, flyControl.noclipOn
 local noclipTransparence = (flyControl.noclipTransp or 65) / 100
-local flyVelocity, flyGyro = nil, nil
-local flyKeys = {W=false, A=false, S=false, D=false, Up=false, Down=false}
+local flyKeys = {}
+local flyAngleSpin = 0
+local flyPisteRepos, flyPisteOutil, flyPersoAnim = nil, nil, nil
+local FLY_ANIMS = {
+    r15 = { repos = "507766388", outil = "507768375" },
+    r6 = { repos = "180435571", outil = "182393478" },
+}
 local flyOldAutoRotate = nil
+local flyOldPlatformStand = nil
 local flyOldMouvement = nil
+local flyPosition = nil
+local flyPositionRoot = nil
+local flyMoveVelocity = Vector3.zero
 local flyOldEtats = nil
 local flySonsSilences = {}
 local flySonAjouteConnection = nil
@@ -675,6 +684,13 @@ local function figerAnimationsFly()
     if maintenant < prochainFigeAnimFly then return end
     prochainFigeAnimFly = maintenant + 0.05
     local perso = joueur.Character
+    -- Le script Animate relance sans cesse les animations de course/chute :
+    -- on le coupe pendant le vol pour éviter que les membres tremblent.
+    local animate = perso and perso:FindFirstChild("Animate")
+    if animate and animate:IsA("LocalScript") and not animate.Disabled then
+        flyAnimateDesactive = animate
+        pcall(function() animate.Disabled = true end)
+    end
     local hum = perso and perso:FindFirstChildOfClass("Humanoid")
     local animator = hum and hum:FindFirstChildOfClass("Animator")
     if not animator then return end
@@ -689,6 +705,12 @@ local function figerAnimationsFly()
 end
 local function restaurerAnimationsFly()
     prochainFigeAnimFly = 0
+    if flyPisteRepos then pcall(function() flyPisteRepos:Stop(0.1) end) end
+    if flyPisteOutil then pcall(function() flyPisteOutil:Stop(0.1) end) end
+    flyPisteRepos, flyPisteOutil, flyPersoAnim = nil, nil, nil
+    local animate = flyAnimateDesactive
+    flyAnimateDesactive = nil
+    if animate and animate.Parent then pcall(function() animate.Disabled = false end) end
 end
 local noclipOriginal = {}
 local noclipVisualOriginal = {}
@@ -700,9 +722,12 @@ local CHUTE_MAX_NOCLIP = 80
 local function nettoyerFly()
     restaurerSonsPasFly()
     restaurerAnimationsFly()
-    if flyVelocity then pcall(function() flyVelocity:Destroy() end); flyVelocity = nil end
-    if flyGyro then pcall(function() flyGyro:Destroy() end); flyGyro = nil end
+    -- Le contrôleur de référence n'utilise aucun BodyVelocity/BodyGyro.
+    -- On arrête net toute vitesse résiduelle à la désactivation.
     for key in pairs(flyKeys) do flyKeys[key] = false end
+    flyPosition = nil
+    flyPositionRoot = nil
+    flyMoveVelocity = Vector3.zero
     if racine and racine.Parent then
         pcall(function()
             racine.AssemblyLinearVelocity = Vector3.zero
@@ -711,8 +736,9 @@ local function nettoyerFly()
     end
     if humanoide and humanoide.Parent then
         local h = humanoide
+        local platformStandARestaurer = flyOldPlatformStand == true
         pcall(function()
-            h.PlatformStand = false
+            h.PlatformStand = flyOldPlatformStand == true
             h.Sit = false
             if flyOldAutoRotate ~= nil then h.AutoRotate = flyOldAutoRotate end
             if flyOldEtats then
@@ -730,90 +756,250 @@ local function nettoyerFly()
             if not h or not h.Parent or flyOn
                 or flyControl.farmActif or flingActif then return end
             pcall(function()
-                h.PlatformStand = false
+                h.PlatformStand = platformStandARestaurer
                 h.Sit = false
-                local auSol = h.FloorMaterial ~= Enum.Material.Air
-                h:ChangeState(auSol and Enum.HumanoidStateType.GettingUp
-                    or Enum.HumanoidStateType.Freefall)
+                if not platformStandARestaurer then
+                    local auSol = h.FloorMaterial ~= Enum.Material.Air
+                    h:ChangeState(auSol and Enum.HumanoidStateType.GettingUp
+                        or Enum.HumanoidStateType.Freefall)
+                end
             end)
         end)
     end
     flyOldAutoRotate = nil
+    flyOldPlatformStand = nil
 end
 local function preparerFly()
     if not flyOn or flingActif or not racine or not racine.Parent then return end
+    if flyPositionRoot ~= racine or flyPosition == nil then
+        flyPositionRoot = racine
+        flyPosition = racine.Position
+        flyMoveVelocity = Vector3.zero
+    end
     couperSonsPasFly()
     figerAnimationsFly()
-    if not flyVelocity or flyVelocity.Parent ~= racine then
-        if flyVelocity then pcall(function() flyVelocity:Destroy() end) end
-        flyVelocity = Instance.new("BodyVelocity")
-        flyVelocity.Name = "TenebresFlyVelocity"
-        flyVelocity.MaxForce = Vector3.new(1e9, 1e9, 1e9)
-        flyVelocity.P = 2e4
-        flyVelocity.Velocity = Vector3.zero
-        flyVelocity.Parent = racine
-    end
-    if not flyGyro or flyGyro.Parent ~= racine then
-        if flyGyro then pcall(function() flyGyro:Destroy() end) end
-        flyGyro = Instance.new("BodyGyro")
-        flyGyro.Name = "TenebresFlyGyro"
-        flyGyro.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
-        flyGyro.P = 2e4
-        flyGyro.D = 800
-        flyGyro.CFrame = racine.CFrame
-        flyGyro.Parent = racine
-    end
-    if humanoide and flyOldAutoRotate == nil then
-        flyOldAutoRotate = humanoide.AutoRotate
+
+    if humanoide then
+        if flyOldAutoRotate == nil then
+            flyOldAutoRotate = humanoide.AutoRotate
+            flyOldPlatformStand = humanoide.PlatformStand
+            flyOldMouvement = {
+                walk = humanoide.WalkSpeed,
+                jump = humanoide.JumpPower,
+                hauteur = humanoide.JumpHeight,
+            }
+        end
         humanoide.AutoRotate = false
+        -- Même comportement que le fly de référence : le Humanoid ne doit
+        -- pas appliquer sa propre locomotion ni la gravité pendant le vol.
+        if not humanoide.PlatformStand then humanoide.PlatformStand = true end
+        if humanoide.WalkSpeed ~= 0 then humanoide.WalkSpeed = 0 end
+        if humanoide.JumpPower ~= 0 then humanoide.JumpPower = 0 end
+        if humanoide.JumpHeight ~= 0 then humanoide.JumpHeight = 0 end
     end
-    if humanoide and not flyOldEtats then
-        flyOldEtats = {}
-        for _, etat in ipairs({ Enum.HumanoidStateType.Jumping, Enum.HumanoidStateType.Freefall }) do
-            local ok, v = pcall(function() return humanoide:GetStateEnabled(etat) end)
-            flyOldEtats[etat] = (not ok) or v == true
-            pcall(function() humanoide:SetStateEnabled(etat, false) end)
+end
+
+-- Animation pendant le vol : pose en l'air en mouvement, pose neutre à l'arrêt
+-- (au lieu de rester figé).
+local function animerFly()
+    local perso = joueur.Character
+    local hum = humanoide
+    if not perso or not hum or not hum.Parent then return end
+    local animator = hum:FindFirstChildOfClass("Animator")
+    if not animator then return end
+    if flyPersoAnim ~= perso then
+        flyPersoAnim = perso
+        flyPisteRepos, flyPisteOutil = nil, nil
+        local ids = FLY_ANIMS[hum.RigType == Enum.HumanoidRigType.R15 and "r15" or "r6"]
+        local function charger(id, nom, priorite)
+            local animation = Instance.new("Animation")
+            animation.Name = nom
+            animation.AnimationId = "rbxassetid://" .. id
+            local ok, piste = pcall(function() return animator:LoadAnimation(animation) end)
+            if ok and piste then
+                piste.Looped = true
+                piste.Priority = priorite
+                return piste
+            end
+            return nil
+        end
+        -- Mêmes priorités que le script Animate du jeu : la pose neutre en
+        -- fond (Core), la pose "arme en main" par-dessus (Idle).
+        flyPisteRepos = charger(ids.repos, "Tenebres_FlyRepos", Enum.AnimationPriority.Core)
+        flyPisteOutil = charger(ids.outil, "Tenebres_FlyOutil", Enum.AnimationPriority.Idle)
+    end
+    if flyPisteRepos and not flyPisteRepos.IsPlaying then
+        pcall(function() flyPisteRepos:Play(0.2) end)
+    end
+    -- Le script Animate est coupé pendant le vol : on rejoue nous-mêmes la
+    -- pose "arme en main, bras tendu" quand un objet est équipé.
+    local outil = perso:FindFirstChildOfClass("Tool")
+    local tenu = outil ~= nil and outil:FindFirstChild("Handle") ~= nil
+    if flyPisteOutil then
+        if tenu and not flyPisteOutil.IsPlaying then
+            pcall(function() flyPisteOutil:Play(0.1) end)
+        elseif not tenu and flyPisteOutil.IsPlaying then
+            pcall(function() flyPisteOutil:Stop(0.1) end)
         end
     end
-    if humanoide and not flyOldMouvement then
-        flyOldMouvement = { walk = humanoide.WalkSpeed, jump = humanoide.JumpPower, hauteur = humanoide.JumpHeight }
-    end
 end
-local function mettreAJourFly()
+local flyParamsCollision = nil
+local flyFiltrePerso = nil
+local flyProchainFiltre = 0
+local FLY_TAILLE_COLLISION = Vector3.new(2.2, 4.8, 2.2)
+local function paramsCollisionFly()
+    local maintenant = os.clock()
+    if not flyParamsCollision then
+        flyParamsCollision = RaycastParams.new()
+        flyParamsCollision.FilterType = Enum.RaycastFilterType.Exclude
+        flyParamsCollision.RespectCanCollide = true
+    end
+    -- Même groupe de collision que le personnage, pour voir les mêmes murs que lui.
+    if racine and racine.Parent then
+        pcall(function() flyParamsCollision.CollisionGroup = racine.CollisionGroup end)
+    end
+    if maintenant >= flyProchainFiltre or flyFiltrePerso ~= joueur.Character then
+        flyProchainFiltre = maintenant + 0.5
+        flyFiltrePerso = joueur.Character
+        local liste = {}
+        for _, autre in ipairs(Players:GetPlayers()) do
+            if autre.Character then liste[#liste + 1] = autre.Character end
+        end
+        flyParamsCollision.FilterDescendantsInstances = liste
+    end
+    return flyParamsCollision
+end
+-- Sans noclip, le fly ne traverse plus les murs : on déplace le personnage
+-- en vérifiant les obstacles, et on glisse le long des surfaces.
+local function deplacerAvecCollisionsFly(depart, deplacement)
+    local position = depart
+    local reste = deplacement
+    local params = paramsCollisionFly()
+    for _ = 1, 3 do
+        local longueur = reste.Magnitude
+        if longueur < 1e-4 then break end
+        local ok, resultat = pcall(function()
+            return workspace:Blockcast(
+                CFrame.new(position - Vector3.new(0, 0.5, 0)),
+                FLY_TAILLE_COLLISION, reste, params)
+        end)
+        if not ok then
+            position += reste
+            break
+        end
+        if not resultat then
+            position += reste
+            break
+        end
+        local distance = resultat.Distance
+        if distance < 0.001 then
+            local normale = resultat.Normal
+            if normale.Magnitude > 0.5 and reste:Dot(normale) < 0 then
+                -- Collé à une surface : on ne garde que la part qui glisse dessus.
+                reste = reste - normale * reste:Dot(normale)
+                continue
+            end
+            -- Chevauchement sans direction fiable (respawn, téléport) : on laisse sortir.
+            position += reste
+            break
+        end
+        position += reste.Unit * math.max(distance - 0.05, 0)
+        local normale = resultat.Normal
+        local reliquat = reste * (1 - distance / longueur)
+        reste = reliquat - normale * reliquat:Dot(normale)
+    end
+    return position
+end
+
+local function mettreAJourFly(dt)
     if not flyOn or flingActif then return end
     if not racine or not racine.Parent then return end
+    if humanoide and humanoide.Health <= 0 then return end
     preparerFly()
-    if not flyVelocity or not flyGyro then return end
+    if flyPosition == nil then return end
+
     local camera = workspace.CurrentCamera
     if not camera then return end
-    local avant = camera.CFrame.LookVector
-    local droite = camera.CFrame.RightVector
+
+    -- Évite les grands sauts de position lorsqu'une frame prend beaucoup
+    -- plus longtemps que prévu (chargement de map, baisse ponctuelle de FPS).
+    dt = math.clamp(tonumber(dt) or 0, 0, 1 / 30)
+    if dt <= 0 then return end
+
+    -- Si quelque chose d'extérieur a déplacé le personnage (téléport du
+    -- serveur au début de la manche, respawn, etc.), on se resynchronise au
+    -- lieu de le ramener de force à l'ancienne position.
+    local ecart = (racine.Position - flyPosition).Magnitude
+    if ecart > flyMoveVelocity.Magnitude * dt + 8 then
+        flyPosition = racine.Position
+        flyMoveVelocity = Vector3.zero
+    end
+
+    local cfCamera = camera.CFrame
     local direction = Vector3.zero
-    if flyKeys.W or flyKeys.Up then direction += avant end
-    if flyKeys.S or flyKeys.Down then direction -= avant end
-    if flyKeys.D then direction += droite end
-    if flyKeys.A then direction -= droite end
-    if UserInputService:IsKeyDown(Enum.KeyCode.Space) then direction += Vector3.yAxis end
-    if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or UserInputService:IsKeyDown(Enum.KeyCode.C) then
-        direction -= Vector3.yAxis
+
+    -- Lecture directe des touches : plus de touche "bloquée" quand on change
+    -- de fenêtre, et aucune entrée prise pendant l'écriture dans le chat.
+    if UserInputService:GetFocusedTextBox() == nil then
+        local K = Enum.KeyCode
+        if UserInputService:IsKeyDown(K.W) or UserInputService:IsKeyDown(K.Z)
+            or UserInputService:IsKeyDown(K.Up) then direction += cfCamera.LookVector end
+        if UserInputService:IsKeyDown(K.S) or UserInputService:IsKeyDown(K.Down) then
+            direction -= cfCamera.LookVector
+        end
+        if UserInputService:IsKeyDown(K.D) then direction += cfCamera.RightVector end
+        if UserInputService:IsKeyDown(K.A) or UserInputService:IsKeyDown(K.Q) then
+            direction -= cfCamera.RightVector
+        end
+        if UserInputService:IsKeyDown(K.Space) then direction += Vector3.yAxis end
+        if UserInputService:IsKeyDown(K.LeftControl) or UserInputService:IsKeyDown(K.C) then
+            direction -= Vector3.yAxis
+        end
     end
+
     if direction.Magnitude > 0.001 then
-        flyVelocity.Velocity = direction.Unit * flySpeed
+        local vitesseCible = direction.Unit * flySpeed
+        -- Accélération progressive à l'appui.
+        local alpha = 1 - math.exp(-14 * dt)
+        flyMoveVelocity += (vitesseCible - flyMoveVelocity) * alpha
     else
-        flyVelocity.Velocity = Vector3.zero
-        racine.AssemblyLinearVelocity = Vector3.zero
+        -- Arrêt immédiat au relâchement : aucun glissement.
+        flyMoveVelocity = Vector3.zero
     end
-    local look, up = camera.CFrame.LookVector, camera.CFrame.UpVector
-    flyGyro.CFrame = CFrame.lookAt(racine.Position, racine.Position + look, up)
-    if humanoide then
-        pcall(function()
-            if humanoide.PlatformStand then humanoide.PlatformStand = false end
-            if humanoide.WalkSpeed ~= 0 then humanoide.WalkSpeed = 0 end
-            if humanoide.JumpPower ~= 0 then humanoide.JumpPower = 0 end
-            if humanoide.JumpHeight ~= 0 then humanoide.JumpHeight = 0 end
-        end)
+
+    local deplacement = flyMoveVelocity * dt
+    if noclipOn then
+        flyPosition += deplacement
+    else
+        flyPosition = deplacerAvecCollisionsFly(flyPosition, deplacement)
     end
+
+    animerFly()
+
+    -- L'orientation suit entièrement la caméra (haut/bas compris).
+    local cfFinal = CFrame.fromMatrix(
+        flyPosition,
+        cfCamera.RightVector,
+        cfCamera.UpVector
+    )
+
+    -- Tourbillon : le fly réécrit l'orientation à chaque frame, donc il
+    -- ajoute lui-même la rotation pour ne pas l'annuler.
+    local spinActif, spinVitesse = false, 10
+    if flyControl.lireSpin then spinActif, spinVitesse = flyControl.lireSpin() end
+    if spinActif then
+        flyAngleSpin = (flyAngleSpin + math.rad((spinVitesse or 10) * 72 * dt)) % (2 * math.pi)
+        cfFinal = cfFinal * CFrame.Angles(0, flyAngleSpin, 0)
+    else
+        flyAngleSpin = 0
+    end
+    racine.CFrame = cfFinal
+
+    -- La physique ne doit ajouter ni gravité résiduelle ni inertie.
+    racine.AssemblyLinearVelocity = Vector3.zero
+    racine.AssemblyAngularVelocity = Vector3.zero
 end
+
 local function oublierNoclipPart(part, rendre)
     if rendre and part.Parent then
         local c = noclipOriginal[part]
@@ -912,28 +1098,17 @@ connecter(joueur.CharacterAdded, function(character)
         if flyOn then preparerFly() end
     end)
 end)
-connecter(UserInputService.InputBegan, function(input, processed)
-    if processed then return end
-    local key = input.KeyCode
-    if key == Enum.KeyCode.W then flyKeys.W = true
-    elseif key == Enum.KeyCode.A then flyKeys.A = true
-    elseif key == Enum.KeyCode.S then flyKeys.S = true
-    elseif key == Enum.KeyCode.D then flyKeys.D = true
-    elseif key == Enum.KeyCode.Up then flyKeys.Up = true
-    elseif key == Enum.KeyCode.Down then flyKeys.Down = true end
+pcall(function() RunService:UnbindFromRenderStep("TenebresFly") end)
+RunService:BindToRenderStep("TenebresFly", Enum.RenderPriority.Camera.Value - 1, function(dt)
+    if fermee then
+        pcall(function() RunService:UnbindFromRenderStep("TenebresFly") end)
+        return
+    end
+    if not chargementTermine or not flyOn then return end
+    mettreAJourFly(dt)
 end)
-connecter(UserInputService.InputEnded, function(input)
-    local key = input.KeyCode
-    if key == Enum.KeyCode.W then flyKeys.W = false
-    elseif key == Enum.KeyCode.A then flyKeys.A = false
-    elseif key == Enum.KeyCode.S then flyKeys.S = false
-    elseif key == Enum.KeyCode.D then flyKeys.D = false
-    elseif key == Enum.KeyCode.Up then flyKeys.Up = false
-    elseif key == Enum.KeyCode.Down then flyKeys.Down = false end
-end)
-connecter(RunService.RenderStepped, function()
+connecter(RunService.RenderStepped, function(dt)
     if fermee then return end
-    if flyOn then mettreAJourFly() end
     if noclipOn and joueur.Character and joueur.Character ~= noclipCharacter then
         attacherNoclip(joueur.Character)
     end
@@ -1000,8 +1175,15 @@ flyControl.reinitialiserNoclipY = function()
     noclipRefY = racine and racine.Position.Y or nil
 end
 flyControl.reinitialiserApresTeleport = function()
-    if flyVelocity then flyVelocity.Velocity = Vector3.zero end
-    if flyGyro and racine and racine.Parent then flyGyro.CFrame = racine.CFrame end
+    if racine and racine.Parent then
+        flyPositionRoot = racine
+        flyPosition = racine.Position
+        flyMoveVelocity = Vector3.zero
+        pcall(function()
+            racine.AssemblyLinearVelocity = Vector3.zero
+            racine.AssemblyAngularVelocity = Vector3.zero
+        end)
+    end
 end
 end
 local COL = {
@@ -3725,6 +3907,7 @@ function activerBooster(v)
 end
 end
 local spinOn, spinVitesse = false, valeurConfig("spinVitesse", 10)
+flyControl.lireSpin = function() return spinOn, spinVitesse end
 local arcOn, traineeOn, discoOn = false, false, false
 local arcHalo = nil
 local retirerTrainee, activerDisco
@@ -3772,7 +3955,7 @@ connecter(RunService.RenderStepped, function(dt)
 		teinte = (os.clock() * 0.4) % 1
 		arc = Color3.fromHSV(teinte, 1, 1)
 	end
-	if spinOn and racine then
+	if spinOn and racine and not flyControl.flyOn then
 		racine.CFrame = racine.CFrame * CFrame.Angles(0, math.rad(spinVitesse * 72 * dt), 0)
 	end
 	if arcOn and joueur.Character then
@@ -4048,6 +4231,256 @@ end)
 interrupteur(pages["Combat"], "Anti AFK", "Évite d'être expulsé pour inactivité", antiAfkOn, function(v)
 	antiAfkOn = v
 end)
+section(pages["Combat"], "Hitbox")
+do
+	-- Le contact est forcé depuis la manche du couteau : c'est la seule pièce
+	-- qui t'appartient, donc la seule dont les touches remontent au serveur.
+	local TAILLE_HITBOX = 200000
+	local boitesHitbox = {}
+	local etat = {
+		killAll = false, auto = false,
+		scan = 0, frappe = 0, activation = 0, jusqua = 0,
+		prochainClic = 0, prochainEquip = 0,
+		ancrage = nil, retour = false,
+	}
+	local function retirerBoite(p)
+		local e = boitesHitbox[p]
+		boitesHitbox[p] = nil
+		if e and e.boite then pcall(function() e.boite:Destroy() end) end
+	end
+	local function retirerToutes()
+		for p in pairs(boitesHitbox) do retirerBoite(p) end
+	end
+	local function racine()
+		local perso = joueur.Character
+		local r = perso and perso:FindFirstChild("HumanoidRootPart")
+		if r and r:IsA("BasePart") then return r end
+		return nil
+	end
+	-- Zone invisible, non solide, parentée au modèle pour que hit.Parent reste
+	-- le personnage (c'est ce que le couteau de MM2 vérifie).
+	local function scanner()
+		for p in pairs(boitesHitbox) do
+			if not p.Parent then retirerBoite(p) end
+		end
+		for _, autre in ipairs(Players:GetPlayers()) do
+			if autre ~= joueur then
+				local perso = autre.Character
+				local r = perso and perso:FindFirstChild("HumanoidRootPart")
+				local hum = perso and perso:FindFirstChildOfClass("Humanoid")
+				if r and r:IsA("BasePart") and hum and hum.Health > 0 then
+					local e = boitesHitbox[autre]
+					if not e or e.racine ~= r or not e.boite.Parent or e.boite.Parent ~= perso then
+						retirerBoite(autre)
+						local boite = Instance.new("Part")
+						boite.Name = "TenebresHitbox"
+						boite.Anchored = true
+						boite.CanCollide = false
+						boite.CanTouch = true
+						boite.CanQuery = false
+						boite.CastShadow = false
+						boite.Massless = true
+						boite.Transparency = 1
+						boite.Size = Vector3.new(TAILLE_HITBOX, TAILLE_HITBOX, TAILLE_HITBOX)
+						boite.CFrame = CFrame.new(r.Position)
+						boite.Parent = perso
+						boitesHitbox[autre] = { boite = boite, racine = r }
+					end
+				else
+					retirerBoite(autre)
+				end
+			else
+				retirerBoite(autre)
+			end
+		end
+	end
+	flyControl.hitbox = { restaurer = retirerToutes }
+
+	-- Point de retour : l'endroit où le couteau sort.
+	local function ancrer()
+		local r = racine()
+		etat.ancrage = r and r.CFrame or nil
+	end
+	-- Retour à l'ancre, debout et déplié.
+	local function revenir()
+		if etat.retour then return end
+		etat.retour = true
+		local perso = joueur.Character
+		local r = perso and perso:FindFirstChild("HumanoidRootPart")
+		local hum = perso and perso:FindFirstChildOfClass("Humanoid")
+		if hum then
+			pcall(function()
+				hum.Sit = false
+				hum.PlatformStand = false
+				hum.Jump = false
+			end)
+			pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+		end
+		if r and etat.ancrage then
+			pcall(function() r.CFrame = etat.ancrage end)
+		end
+		task.delay(0.2, function()
+			if hum and hum.Parent then
+				pcall(function() hum:ChangeState(Enum.HumanoidStateType.Running) end)
+			end
+			etat.retour = false
+		end)
+	end
+
+	-- Manche du couteau réellement équipé (le contact doit partir de lui).
+	local function manche()
+		local perso = joueur.Character
+		local outil = perso and perso:FindFirstChildOfClass("Tool")
+		if not outil then return nil end
+		local nomOutil = string.lower(outil.Name)
+		if not string.find(nomOutil, "knife", 1, true) and not string.find(nomOutil, "couteau", 1, true) then
+			return nil
+		end
+		local m = outil:FindFirstChild("Handle")
+		if m and m:IsA("BasePart") then return m end
+		return nil
+	end
+
+	-- Ressort le couteau tout seul : sac d'abord, puis couteau tombé au sol.
+	local function sortirCouteau()
+		local maintenant = os.clock()
+		if maintenant < etat.prochainEquip then return false end
+		etat.prochainEquip = maintenant + 0.5
+		local perso = joueur.Character
+		if not perso then return false end
+		if perso:FindFirstChildOfClass("Tool") then return true end
+		local hum = perso:FindFirstChildOfClass("Humanoid")
+		if not hum then return false end
+		local sources = {}
+		local sac = joueur:FindFirstChildOfClass("Backpack")
+		if sac then
+			for _, o in ipairs(sac:GetChildren()) do
+				if o:IsA("Tool") then table.insert(sources, o) end
+			end
+		end
+		if #sources == 0 then
+			for _, o in ipairs(workspace:GetChildren()) do
+				if o:IsA("Tool") then table.insert(sources, o) end
+			end
+		end
+		for _, o in ipairs(sources) do
+			local nomOutil = string.lower(o.Name)
+			if string.find(nomOutil, "knife", 1, true) or string.find(nomOutil, "couteau", 1, true) then
+				if not etat.ancrage then ancrer() end
+				pcall(function() hum:EquipTool(o) end)
+				return true
+			end
+		end
+		return false
+	end
+
+	-- Un seul swing : ouvre la fenêtre d'attaque côté serveur.
+	local function activer()
+		local m = manche()
+		if not m then return false end
+		pcall(function() m.Parent:Activate() end)
+		return true
+	end
+	local function toucher(m, autre, boite)
+		local perso = autre.Character
+		local hum = perso and perso:FindFirstChildOfClass("Humanoid")
+		if not hum or hum.Health <= 0 then return end
+		local r = perso:FindFirstChild("HumanoidRootPart")
+		if r then
+			pcall(firetouchinterest, m, r, 0)
+			pcall(firetouchinterest, m, r, 1)
+		end
+		if boite and boite.Parent then
+			pcall(firetouchinterest, m, boite, 0)
+			pcall(firetouchinterest, m, boite, 1)
+		end
+	end
+	local function frapper()
+		if typeof(firetouchinterest) ~= "function" then return end
+		local m = manche()
+		if not m then return end
+		for _, autre in ipairs(Players:GetPlayers()) do
+			if autre ~= joueur then
+				local e = boitesHitbox[autre]
+				toucher(m, autre, e and e.boite)
+			end
+		end
+	end
+
+	local function lancerKillAll()
+		ancrer()
+		etat.killAll = true
+		-- Fenêtre plus large si le couteau doit d'abord être équipé.
+		etat.jusqua = os.clock() + (manche() and 0.4 or 0.9)
+		scanner()
+		sortirCouteau()
+		activer()
+	end
+
+	carteBouton(pages["Combat"], "Kill All",
+		"Coup instantané sur toute la map : clic gauche en jeu",
+		"KILL ALL", COL.VIOLET, lancerKillAll)
+
+	-- Le clic gauche en jeu déclenche le coup tout seul.
+	connecter(UserInputService.InputBegan, function(entree, pris)
+		if fermee or pris then return end
+		if entree.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+		local maintenant = os.clock()
+		if maintenant < etat.prochainClic then return end
+		etat.prochainClic = maintenant + 0.15
+		lancerKillAll()
+	end)
+
+	interrupteur(pages["Combat"], "Auto Kill All",
+		"Tue toute la map en continu, tu bouges librement", false,
+		function(v)
+			etat.auto = v
+			if v then
+				ancrer()
+				scanner()
+				sortirCouteau()
+				activer()
+				etat.activation = os.clock() + 0.6
+			else
+				if not etat.killAll then
+					retirerToutes()
+					revenir()
+				end
+			end
+		end)
+
+	connecter(RunService.Heartbeat, function()
+		if fermee then return end
+		local maintenant = os.clock()
+		if etat.killAll and maintenant >= etat.jusqua then
+			etat.killAll = false
+			if not etat.auto then
+				retirerToutes()
+				revenir()
+			end
+		end
+		local burst = maintenant < etat.jusqua
+		if not etat.killAll and not etat.auto and not burst then return end
+		-- Couteau en main obligatoire : on le ressort s'il manque.
+		if not manche() then sortirCouteau() end
+		if maintenant >= etat.scan then
+			etat.scan = maintenant + 0.25
+			scanner()
+		end
+		for _, e in pairs(boitesHitbox) do
+			if e.racine.Parent and e.boite.Parent then
+				e.boite.CFrame = CFrame.new(e.racine.Position)
+			end
+		end
+		if etat.auto and maintenant >= etat.activation then
+			etat.activation = maintenant + 0.6
+			activer()
+		end
+		if maintenant < etat.frappe then return end
+		etat.frappe = maintenant + (burst and 0.03 or 0.12)
+		frapper()
+	end)
+end
 section(pages["Visuel"], "Rôles & Chams")
 flyControl.inters.chams = interrupteur(pages["Visuel"], "Chams", "Murder rouge, Sheriff bleu, Héros jaune, innocents verts", false, function(v)
 	rolesActifs = v
@@ -7689,6 +8122,7 @@ local function fermerScript()
         if nettoyerChams then nettoyerChams() end
     end)
     pcall(function() if flyControl.compteurQuitter then flyControl.compteurQuitter() end end)
+    pcall(function() if flyControl.hitbox then flyControl.hitbox.restaurer() end end)
     scriptFerme = true
     for connexion in pairs(connexionsGlobales) do
         pcall(function() connexion:Disconnect() end)
