@@ -4328,10 +4328,16 @@ do
 	local function ancrer()
 		local r = racine()
 		etat.ancrage = r and r.CFrame or nil
+		etat.tAncrage = os.clock()
 	end
 	-- Retour à l'ancre, debout et déplié.
 	local function revenir()
 		if etat.retour then return end
+		-- Un TP manuel a eu lieu depuis l'ancrage : ne pas te ramener à l'ancienne position.
+		if (flyControl.tpDernier or 0) >= (etat.tAncrage or 0) then
+			etat.ancrage = nil
+			return
+		end
 		etat.retour = true
 		local perso = joueur.Character
 		local r = perso and perso:FindFirstChild("HumanoidRootPart")
@@ -4594,6 +4600,7 @@ local entrees = {}
 local flingVers
 flyControl.marquerArriveeManuelle = function()
     flyControl.tpJusque = os.clock() + 1.5
+    flyControl.tpDernier = os.clock()
     local perso0 = joueur.Character
     local hum0 = perso0 and perso0:FindFirstChildOfClass("Humanoid")
     local dansLobby = flyControl.Z and flyControl.Z.dansLobby
