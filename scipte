@@ -151,6 +151,22 @@ do
     end
     env.__TENEBRES_FERMER = nil
     pcall(function()
+        local perso = joueur.Character
+        local r = perso and perso:FindFirstChild("HumanoidRootPart")
+        if r then
+            r.AssemblyLinearVelocity = Vector3.zero
+            r.AssemblyAngularVelocity = Vector3.zero
+        end
+        for _, p in ipairs(Players:GetPlayers()) do
+            local c = p.Character
+            if c then
+                for _, o in ipairs(c:GetChildren()) do
+                    if o.Name == "TenebresHitbox" then o:Destroy() end
+                end
+            end
+        end
+    end)
+    pcall(function()
         local pg = joueur:WaitForChild("PlayerGui", 10)
         local vieux = pg and pg:FindFirstChild("LesTenebresMenu")
         while vieux do
@@ -4243,6 +4259,265 @@ end)
 interrupteur(pages["Combat"], "Anti AFK", "Évite d'être expulsé pour inactivité", antiAfkOn, function(v)
 	antiAfkOn = v
 end)
+section(pages["Combat"], "Hitbox")
+do
+	-- Le contact est forcé depuis la manche du couteau : c'est la seule pièce
+	-- qui t'appartient, donc la seule dont les touches remontent au serveur.
+	local TAILLE_HITBOX = 200000
+	local boitesHitbox = {}
+	local etat = {
+		killAll = false, auto = false,
+		scan = 0, frappe = 0, activation = 0, jusqua = 0,
+		prochainClic = 0, prochainEquip = 0,
+		ancrage = nil, retour = false,
+	}
+	local function retirerBoite(p)
+		local e = boitesHitbox[p]
+		boitesHitbox[p] = nil
+		if e and e.boite then pcall(function() e.boite:Destroy() end) end
+	end
+	local function retirerToutes()
+		for p in pairs(boitesHitbox) do retirerBoite(p) end
+	end
+	local function racine()
+		local perso = joueur.Character
+		local r = perso and perso:FindFirstChild("HumanoidRootPart")
+		if r and r:IsA("BasePart") then return r end
+		return nil
+	end
+	-- Zone invisible, non solide, parentée au modèle pour que hit.Parent reste
+	-- le personnage (c'est ce que le couteau de MM2 vérifie).
+	local function scanner()
+		for p in pairs(boitesHitbox) do
+			if not p.Parent then retirerBoite(p) end
+		end
+		for _, autre in ipairs(Players:GetPlayers()) do
+			if autre ~= joueur then
+				local perso = autre.Character
+				local r = perso and perso:FindFirstChild("HumanoidRootPart")
+				local hum = perso and perso:FindFirstChildOfClass("Humanoid")
+				if r and r:IsA("BasePart") and hum and hum.Health > 0 then
+					local e = boitesHitbox[autre]
+					if not e or e.racine ~= r or not e.boite.Parent or e.boite.Parent ~= perso then
+						retirerBoite(autre)
+						local boite = Instance.new("Part")
+						boite.Name = "TenebresHitbox"
+						boite.Anchored = true
+						boite.CanCollide = false
+						boite.CanTouch = true
+						boite.CanQuery = false
+						boite.CastShadow = false
+						boite.Massless = true
+						boite.Transparency = 1
+						boite.Size = Vector3.new(TAILLE_HITBOX, TAILLE_HITBOX, TAILLE_HITBOX)
+						boite.CFrame = CFrame.new(r.Position)
+						boite.Parent = perso
+						boitesHitbox[autre] = { boite = boite, racine = r }
+					end
+				else
+					retirerBoite(autre)
+				end
+			else
+				retirerBoite(autre)
+			end
+		end
+	end
+	flyControl.hitbox = { restaurer = retirerToutes }
+
+	-- Point de retour : l'endroit où le couteau sort.
+	local function ancrer()
+		local r = racine()
+		etat.ancrage = r and r.CFrame or nil
+	end
+	-- Retour à l'ancre, debout et déplié.
+	local function revenir()
+		if etat.retour then return end
+		etat.retour = true
+		local perso = joueur.Character
+		local r = perso and perso:FindFirstChild("HumanoidRootPart")
+		local hum = perso and perso:FindFirstChildOfClass("Humanoid")
+		if hum then
+			pcall(function()
+				hum.Sit = false
+				hum.PlatformStand = false
+				hum.Jump = false
+			end)
+			pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+		end
+		if r and etat.ancrage then
+			pcall(function() r.CFrame = etat.ancrage end)
+		end
+		task.delay(0.2, function()
+			if hum and hum.Parent then
+				pcall(function() hum:ChangeState(Enum.HumanoidStateType.Running) end)
+			end
+			etat.retour = false
+		end)
+	end
+
+	-- Manche du couteau réellement équipé (le contact doit partir de lui).
+	local function manche()
+		local perso = joueur.Character
+		local outil = perso and perso:FindFirstChildOfClass("Tool")
+		if not outil then return nil end
+		local nomOutil = string.lower(outil.Name)
+		if not string.find(nomOutil, "knife", 1, true) and not string.find(nomOutil, "couteau", 1, true) then
+			return nil
+		end
+		local m = outil:FindFirstChild("Handle")
+		if m and m:IsA("BasePart") then return m end
+		return nil
+	end
+
+	-- Un autre objet (gun, etc.) est en main : le Kill All ne doit pas s'activer.
+	etat.tientAutreOutil = function()
+		local perso = joueur.Character
+		local outil = perso and perso:FindFirstChildOfClass("Tool")
+		return outil ~= nil and manche() == nil
+	end
+
+	-- Ressort le couteau tout seul : sac d'abord, puis couteau tombé au sol.
+	local function sortirCouteau()
+		local maintenant = os.clock()
+		if maintenant < etat.prochainEquip then return false end
+		etat.prochainEquip = maintenant + 0.5
+		local perso = joueur.Character
+		if not perso then return false end
+		if perso:FindFirstChildOfClass("Tool") then return true end
+		local hum = perso:FindFirstChildOfClass("Humanoid")
+		if not hum then return false end
+		local sources = {}
+		local sac = joueur:FindFirstChildOfClass("Backpack")
+		if sac then
+			for _, o in ipairs(sac:GetChildren()) do
+				if o:IsA("Tool") then table.insert(sources, o) end
+			end
+		end
+		if #sources == 0 then
+			for _, o in ipairs(workspace:GetChildren()) do
+				if o:IsA("Tool") then table.insert(sources, o) end
+			end
+		end
+		for _, o in ipairs(sources) do
+			local nomOutil = string.lower(o.Name)
+			if string.find(nomOutil, "knife", 1, true) or string.find(nomOutil, "couteau", 1, true) then
+				if not etat.ancrage then ancrer() end
+				pcall(function() hum:EquipTool(o) end)
+				return true
+			end
+		end
+		return false
+	end
+
+	-- Un seul swing : ouvre la fenêtre d'attaque côté serveur.
+	local function activer()
+		local m = manche()
+		if not m then return false end
+		pcall(function() m.Parent:Activate() end)
+		return true
+	end
+	local function toucher(m, autre, boite)
+		local perso = autre.Character
+		local hum = perso and perso:FindFirstChildOfClass("Humanoid")
+		if not hum or hum.Health <= 0 then return end
+		local r = perso:FindFirstChild("HumanoidRootPart")
+		if r then
+			pcall(firetouchinterest, m, r, 0)
+			pcall(firetouchinterest, m, r, 1)
+		end
+		if boite and boite.Parent then
+			pcall(firetouchinterest, m, boite, 0)
+			pcall(firetouchinterest, m, boite, 1)
+		end
+	end
+	local function frapper()
+		if typeof(firetouchinterest) ~= "function" then return end
+		local m = manche()
+		if not m then return end
+		for _, autre in ipairs(Players:GetPlayers()) do
+			if autre ~= joueur then
+				local e = boitesHitbox[autre]
+				toucher(m, autre, e and e.boite)
+			end
+		end
+	end
+
+	local function lancerKillAll()
+		if etat.tientAutreOutil() then return end
+		ancrer()
+		etat.killAll = true
+		-- Fenêtre plus large si le couteau doit d'abord être équipé.
+		etat.jusqua = os.clock() + (manche() and 0.4 or 0.9)
+		scanner()
+		sortirCouteau()
+		activer()
+	end
+
+	carteBouton(pages["Combat"], "Kill All",
+		"Coup instantané sur toute la map : clic gauche en jeu",
+		"KILL ALL", COL.VIOLET, lancerKillAll)
+
+	-- Le clic gauche en jeu déclenche le coup tout seul.
+	connecter(UserInputService.InputBegan, function(entree, pris)
+		if fermee or pris then return end
+		if entree.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+		local maintenant = os.clock()
+		if maintenant < etat.prochainClic then return end
+		etat.prochainClic = maintenant + 0.15
+		if etat.tientAutreOutil() then return end
+		lancerKillAll()
+	end)
+
+	interrupteur(pages["Combat"], "Auto Kill All",
+		"Tue toute la map en continu, tu bouges librement", false,
+		function(v)
+			etat.auto = v
+			if v then
+				ancrer()
+				scanner()
+				sortirCouteau()
+				activer()
+				etat.activation = os.clock() + 0.6
+			else
+				if not etat.killAll then
+					retirerToutes()
+					revenir()
+				end
+			end
+		end)
+
+	connecter(RunService.Heartbeat, function()
+		if fermee then return end
+		local maintenant = os.clock()
+		if etat.killAll and maintenant >= etat.jusqua then
+			etat.killAll = false
+			if not etat.auto then
+				retirerToutes()
+				revenir()
+			end
+		end
+		local burst = maintenant < etat.jusqua
+		if not etat.killAll and not etat.auto and not burst then return end
+		-- Couteau en main obligatoire : on le ressort s'il manque.
+		if not manche() then sortirCouteau() end
+		if maintenant >= etat.scan then
+			etat.scan = maintenant + 0.25
+			scanner()
+		end
+		for _, e in pairs(boitesHitbox) do
+			if e.racine.Parent and e.boite.Parent then
+				e.boite.CFrame = CFrame.new(e.racine.Position)
+			end
+		end
+		if etat.auto and maintenant >= etat.activation then
+			etat.activation = maintenant + 0.6
+			activer()
+		end
+		if maintenant < etat.frappe then return end
+		etat.frappe = maintenant + (burst and 0.03 or 0.12)
+		frapper()
+	end)
+end
 section(pages["Visuel"], "Rôles & Chams")
 flyControl.inters.chams = interrupteur(pages["Visuel"], "Chams", "Murder rouge, Sheriff bleu, Héros jaune, innocents verts", false, function(v)
 	rolesActifs = v
