@@ -4324,41 +4324,61 @@ do
 	end
 	flyControl.hitbox = { restaurer = retirerToutes }
 
-	-- Point de retour : l'endroit où le couteau sort.
+	-- Instantané complet avant le coup : position, vitesse, pose, caméra, objet en main.
 	local function ancrer()
+		local perso = joueur.Character
 		local r = racine()
-		etat.ancrage = r and r.CFrame or nil
-		etat.tAncrage = os.clock()
+		local hum = perso and perso:FindFirstChildOfClass("Humanoid")
+		if not r or not hum then etat.snap = nil return end
+		local cam = workspace.CurrentCamera
+		etat.snap = {
+			t = os.clock(),
+			cf = r.CFrame,
+			vel = r.AssemblyLinearVelocity,
+			sit = hum.Sit,
+			plat = hum.PlatformStand,
+			rot = hum.AutoRotate,
+			cam = cam and cam.CFrame or nil,
+			-- Seul le couteau peut être en main ici (un autre objet bloque le Kill All).
+			couteauEnMain = perso:FindFirstChildOfClass("Tool") ~= nil,
+		}
 	end
-	-- Retour à l'ancre, debout et déplié.
+	-- Restaure l'instantané : même endroit, même pose, même objet en main.
+	-- Aucun retour forcé si tu t'es TP ou si tu diriges ton personnage toi-même.
 	local function revenir()
 		if etat.retour then return end
-		-- Un TP manuel a eu lieu depuis l'ancrage : ne pas te ramener à l'ancienne position.
-		if (flyControl.tpDernier or 0) >= (etat.tAncrage or 0) then
-			etat.ancrage = nil
-			return
-		end
-		etat.retour = true
+		local snap = etat.snap
+		etat.snap = nil
+		if not snap then return end
 		local perso = joueur.Character
-		local r = perso and perso:FindFirstChild("HumanoidRootPart")
+		local r = racine()
 		local hum = perso and perso:FindFirstChildOfClass("Humanoid")
-		if hum then
+		if not r or not hum or hum.Health <= 0 then return end
+		etat.retour = true
+		local tpManuel = (flyControl.tpDernier or 0) >= snap.t
+		local deplace = (r.Position - snap.cf.Position).Magnitude > 3
+		if deplace and not tpManuel and hum.MoveDirection.Magnitude < 0.1 then
 			pcall(function()
-				hum.Sit = false
-				hum.PlatformStand = false
-				hum.Jump = false
+				if hum.Sit and not snap.sit then hum.Sit = false end
+				if hum.PlatformStand and not snap.plat then hum.PlatformStand = false end
+				perso:PivotTo(snap.cf)
+				r.AssemblyLinearVelocity = snap.vel
+				r.AssemblyAngularVelocity = Vector3.zero
+				local cam = workspace.CurrentCamera
+				if cam and snap.cam then cam.CFrame = snap.cam end
 			end)
-			pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
-		end
-		if r and etat.ancrage then
-			pcall(function() r.CFrame = etat.ancrage end)
-		end
-		task.delay(0.2, function()
-			if hum and hum.Parent then
-				pcall(function() hum:ChangeState(Enum.HumanoidStateType.Running) end)
+			local e = hum:GetState()
+			if e == Enum.HumanoidStateType.Ragdoll or e == Enum.HumanoidStateType.FallingDown
+				or e == Enum.HumanoidStateType.Physics or e == Enum.HumanoidStateType.PlatformStanding then
+				pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
 			end
-			etat.retour = false
-		end)
+		end
+		pcall(function() hum.AutoRotate = snap.rot end)
+		-- Le couteau n'était pas en main avant : on le range.
+		if not snap.couteauEnMain and not etat.auto then
+			pcall(function() hum:UnequipTools() end)
+		end
+		task.delay(0.2, function() etat.retour = false end)
 	end
 
 	-- Manche du couteau réellement équipé (le contact doit partir de lui).
@@ -4407,7 +4427,7 @@ do
 		for _, o in ipairs(sources) do
 			local nomOutil = string.lower(o.Name)
 			if string.find(nomOutil, "knife", 1, true) or string.find(nomOutil, "couteau", 1, true) then
-				if not etat.ancrage then ancrer() end
+				if not etat.snap then ancrer() end
 				pcall(function() hum:EquipTool(o) end)
 				return true
 			end
@@ -4450,7 +4470,7 @@ do
 
 	local function lancerKillAll()
 		if etat.tientAutreOutil() then return end
-		ancrer()
+		if not etat.snap then ancrer() end
 		etat.killAll = true
 		-- Fenêtre plus large si le couteau doit d'abord être équipé.
 		etat.jusqua = os.clock() + (manche() and 0.4 or 0.9)
@@ -4484,7 +4504,7 @@ do
 		function(v)
 			etat.auto = v
 			if v then
-				ancrer()
+				if not etat.snap then ancrer() end
 				scanner()
 				sortirCouteau()
 				activer()
