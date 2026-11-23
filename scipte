@@ -2555,7 +2555,12 @@ local function tw(o, props, t, style)
 	end)
 	if not ok or not anim then return nil end
 	tweensActifs[o] = anim
-	anim.Completed:Connect(function()
+	local connexionTerminee
+	connexionTerminee = anim.Completed:Connect(function()
+		if connexionTerminee then
+			connexionTerminee:Disconnect()
+			connexionTerminee = nil
+		end
 		if tweensActifs[o] == anim then
 			tweensActifs[o] = nil
 		end
@@ -2564,12 +2569,19 @@ local function tw(o, props, t, style)
 	return anim
 end
 local function texte(parent, props)
-	local base = {
-		BackgroundTransparency = 1, TextColor3 = COL.TEXTE, Font = Enum.Font.Gotham,
-		TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left, Text = "",
-	}
-	for k, v in pairs(props) do base[k] = v end
-	return creer("TextLabel", base, parent)
+	-- Évite de créer puis recopier une table intermédiaire pour chaque label.
+	-- Les valeurs par défaut et l'ordre d'application des propriétés restent identiques.
+	local o = Instance.new("TextLabel")
+	pcall(function() o.AutoLocalize = false end)
+	o.BackgroundTransparency = 1
+	o.TextColor3 = COL.TEXTE
+	o.Font = Enum.Font.Gotham
+	o.TextSize = 12
+	o.TextXAlignment = Enum.TextXAlignment.Left
+	o.Text = ""
+	for k, v in pairs(props) do o[k] = v end
+	o.Parent = parent
+	return o
 end
 local function figerTexte(objet, valeur)
 	if not objet then return objet end
