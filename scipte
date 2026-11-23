@@ -4463,10 +4463,15 @@ do
 		"Coup instantané sur toute la map : clic gauche en jeu",
 		"KILL ALL", COL.VIOLET, lancerKillAll)
 
-	-- Le clic gauche en jeu déclenche le coup tout seul.
+	interrupteur(pages["Combat"], "Clic gauche = Kill All",
+		"Désactivé par défaut : sinon chaque coup de couteau tue toute la map", false,
+		function(v) etat.clicKill = v end)
+
+	-- Le clic gauche en jeu déclenche le coup (uniquement si l'option ci-dessus est active).
 	connecter(UserInputService.InputBegan, function(entree, pris)
 		if fermee or pris then return end
 		if entree.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+		if not etat.clicKill then return end
 		local maintenant = os.clock()
 		if maintenant < etat.prochainClic then return end
 		etat.prochainClic = maintenant + 0.15
